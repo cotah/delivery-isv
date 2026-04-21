@@ -49,10 +49,14 @@ class SoftDeleteMixin:
 
 
 class CreatedAtMixin:
-    """Adiciona só created_at, sem updated_at.
+    """Mixin para modelos append-only (logs, eventos, auditoria).
 
-    Para tabelas de log imutável (admin_logs, order_status_logs,
-    notifications, cart_items) conforme ADR-004/005.
+    Apenas created_at — sem updated_at, sem deleted_at.
+    Uso: OrderStatusLog e futuros modelos de evento/auditoria
+    (admin_logs, notifications, etc.).
+
+    MUTUAMENTE EXCLUSIVO com TimestampMixin (ADR-019). Compor os dois
+    causa conflito de definição de created_at.
     """
 
     created_at: Mapped[datetime] = mapped_column(

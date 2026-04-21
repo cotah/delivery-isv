@@ -79,3 +79,28 @@ class AddonGroupType(StrEnum):
 
     SINGLE = "single"
     MULTIPLE = "multiple"
+
+
+class OrderStatus(StrEnum):
+    """Status do pedido (ADR-017).
+
+    Máquina de estados:
+        pending -> confirmed -> preparing -> out_for_delivery -> delivered (terminal)
+        pending/confirmed/preparing -> canceled
+        pending -> payment_failed (terminal)
+
+    Transição out_for_delivery -> canceled NÃO permitida no piloto
+    (ADR-017 refinamento R2). Sub-estados de cancelamento
+    (by_customer/by_store) também não — motivo vai em
+    OrderStatusLog.reason.
+
+    Valores armazenados como VARCHAR(20) com CHECK dinâmico (ADR-006).
+    """
+
+    PENDING = "pending"
+    CONFIRMED = "confirmed"
+    PREPARING = "preparing"
+    OUT_FOR_DELIVERY = "out_for_delivery"
+    DELIVERED = "delivered"
+    CANCELED = "canceled"
+    PAYMENT_FAILED = "payment_failed"

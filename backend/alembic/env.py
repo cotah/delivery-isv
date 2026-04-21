@@ -21,6 +21,7 @@ from app.models import (  # noqa: F401
     category,
     city,
     customer,
+    order,
     product,
     product_addon_group,
     product_variation,
