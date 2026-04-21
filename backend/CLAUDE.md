@@ -7,7 +7,7 @@
 ## 1. Estado atual (2026-04-21)
 
 ### Schema de domínio
-**11 tabelas no Postgres:**
+**12 tabelas no Postgres:**
 - `cities` — 3 rows (seed MG: Tarumirim, Itanhomi, Alvarenga)
 - `customers` — 0 rows (produção real, sem seed)
 - `addresses` — 0 rows (depende de Customer)
@@ -18,10 +18,11 @@
 - `addon_groups` — 0 rows
 - `addons` — 0 rows
 - `product_addon_groups` — 0 rows (tabela de junção M:N)
+- `orders` — 0 rows (produção real, sem seed)
 - `alembic_version` — 1 row (controle do Alembic)
 
 ### Migrations
-**11 aplicadas** em sequência:
+**12 aplicadas** em sequência:
 1. `57aa2a205690` — create cities table
 2. `ffd2034a50bd` — seed mg cities
 3. `6ebc0349ab8c` — create customers table
@@ -33,16 +34,17 @@
 9. `f13cab7f836a` — create product_variations table
 10. `11aa25d907f3` — create addon_groups and addons tables
 11. `c19dc1358909` — create product_addon_groups junction table
+12. `ce147e4e4268` — create orders table
 
 ### Qualidade
-- **191 testes** passando em ~0.35s
-- **mypy strict** limpo em **49 source files**
+- **222 testes** passando em ~0.35s
+- **mypy strict** limpo em **51 source files**
 - **ruff check** + **ruff format** limpos
 - Zero `# noqa`, zero `# type: ignore`, zero warnings
 
 ### Arquitetura documentada
-- **15 ADRs** em `C:\Users\henri\Documents\My second mind\Projetos\ISV Delivery\11 - Decisões Técnicas (log).md`
-- 6 StrEnums em `app/domain/enums.py`: `Environment`, `AddressType`, `TaxIdType`, `StoreStatus`, `ProductStatus`, `AddonGroupType`
+- **19 ADRs** em `C:\Users\henri\Documents\My second mind\Projetos\ISV Delivery\11 - Decisões Técnicas (log).md`
+- 7 StrEnums em `app/domain/enums.py`: `Environment`, `AddressType`, `TaxIdType`, `StoreStatus`, `ProductStatus`, `AddonGroupType`, `OrderStatus`
 
 ---
 
@@ -55,10 +57,13 @@ Estas regras saíram de ADRs e foram validadas empiricamente. **Desvio requer no
 - Python default `new_uuid()` + Postgres `server_default=text("gen_random_uuid()")` — duplo default.
 - `public_id` (VARCHAR curto) **só** em tabelas expostas ao usuário/suporte (orders, payments, refunds, support_tickets).
 
-### Mixins (ADR-004, ADR-005)
-- **`TimestampMixin`** (`created_at` + `updated_at`) em **tudo**, exceto logs append-only.
-- **`SoftDeleteMixin`** (`deleted_at`) em **entidades persistentes** (Customer, Address, Store, Product, ProductVariation, AddonGroup, Addon).
-- **NÃO** usa `SoftDeleteMixin` em tabelas de junção (`ProductAddonGroup`), tabelas lookup (`Category`) ou tabelas com `is_active` dedicado (`City`, `Category` — ADR-008/013).
+### Mixins (ADR-004, ADR-005, ADR-019) — 3 mixins composáveis
+
+- **`TimestampMixin`** (`created_at` + `updated_at`) em entidades com estado mutável. **NÃO** usar em logs append-only.
+- **`SoftDeleteMixin`** (`deleted_at`) em entidades persistentes que podem ser "descontinuadas" (Customer, Address, Store, Product, ProductVariation, AddonGroup, Addon, Order). Composto com TimestampMixin.
+- **`CreatedAtMixin`** (apenas `created_at`) em modelos append-only — logs, eventos, auditoria (futuro: OrderStatusLog, admin_logs, notifications). **Mutuamente exclusivo com TimestampMixin.**
+
+**NÃO** usar `SoftDeleteMixin` em tabelas de junção (`ProductAddonGroup`), tabelas lookup (`Category`) ou tabelas com `is_active` dedicado (`City`, `Category` — ADR-008/013).
 
 ### Enums com CHECK (ADR-006) — DUPLO CUIDADO
 - `Mapped[MyStrEnum]` **SEM** `mapped_column(String(N))` explícito → SQLAlchemy gera `sa.Enum` nativo do Postgres (**NÃO QUEREMOS ISSO**).
@@ -92,6 +97,8 @@ Estas regras saíram de ADRs e foram validadas empiricamente. **Desvio requer no
 | Addon → AddonGroup | composição | CASCADE |
 | ProductAddonGroup → Product | composição (junção) | CASCADE |
 | ProductAddonGroup → AddonGroup | composição (junção) | CASCADE |
+| Order → Customer | entidade | RESTRICT |
+| Order → Store | entidade | RESTRICT |
 
 ### UniqueConstraint multi-coluna
 **Armadilha:** `naming_convention` do metadata usa `%(column_0_name)s` pra UNIQUE — só pega a 1ª coluna, gerando nome ambíguo em constraints multi-coluna.
@@ -106,6 +113,29 @@ UniqueConstraint(
 Formato: `uq_<table>_<col1>_<col2>_...`.
 
 **Obs:** string literal em `name=...` é honrada **diretamente** pelo SQLAlchemy — `naming_convention` só entra em ação quando `name=None`.
+
+### UNIQUE parcial (ADR-017)
+
+SQLAlchemy `UniqueConstraint` **não suporta** cláusula `WHERE`. Para UNIQUE parcial no Postgres, usar `Index(..., unique=True, postgresql_where=text("..."))`:
+
+```python
+Index(
+    "uq_orders_payment_gateway_transaction_id",
+    "payment_gateway_transaction_id",
+    unique=True,
+    postgresql_where=text("payment_gateway_transaction_id IS NOT NULL"),
+)
+```
+
+Nome segue padrão `uq_<table>_<col>` mesmo sendo declarado como Index. Caso real de uso: idempotência de webhook externo (Pagar.me charge_id) onde muitos registros têm valor NULL (pedidos pré-pagamento) e apenas os não-NULL devem ser únicos.
+
+### public_id (ADR-003, ADR-018)
+
+Formato `<PREFIX>-XXXXXXXX` — 8 caracteres sobre alfabeto reduzido de 31 símbolos (`ABCDEFGHJKMNPQRSTUVWXYZ23456789`, exclui `0`, `O`, `I`, `1`, `L`). Coluna sempre `VARCHAR(12)` (prefixo 4 + sufixo 8).
+
+Geração via `new_public_id(prefix: str = "ISV")` em `app/db/identifiers.py` — stateless, `secrets.choice()`, sem server_default no banco. UNIQUE constraint como proteção final contra colisão.
+
+Prefixos por entidade: `ISV-` (Order), `REF-` (Refund futuro), `TKT-` (SupportTicket futuro). Display sequencial por dia é responsabilidade do frontend via `ROW_NUMBER() OVER (...)`.
 
 ### Validação (ADR-010)
 - **Defense-in-depth**: Pydantic na borda (HTTP 422) + SQLAlchemy `@validates` no modelo (última linha).
@@ -183,6 +213,14 @@ Se coluna é `VARCHAR(10)` e você testa CHECK violation com string de 12 chars,
 ### Commit de linha de teste criada no happy path
 Se criar dados temporários em teste ativo (store temp, product temp), **delete no final do teste**. `stores`, `products`, etc. são tabelas de produção — permanecer vazias. Seeds só em `cities` e `categories`.
 
+### ADR escrito sem verificar código existente
+
+ADR novo deve ser escrito **depois** de verificar o que já existe no código. Caso real (ciclo Order fase 1): ADR-018 foi redigido com formato `ISV-XXXXXX` (6 chars) sem consultar `new_public_id()` existente em `app/db/identifiers.py`, que já gerava 8 chars desde o commit 158fa23. Divergência só foi detectada na hora de escrever testes. **Solução:** antes de redigir qualquer ADR, listar arquivos/funções relacionados e ler o código atual. ADR reflete decisão baseada em realidade, não intenção projetada por cima.
+
+### UNIQUE parcial ≠ UniqueConstraint
+
+`UniqueConstraint` do SQLAlchemy não aceita `postgresql_where`. Tentar `UniqueConstraint("col", postgresql_where=...)` falha silenciosamente ou gera DDL errado. **Solução:** declarar como `Index(..., unique=True, postgresql_where=text("..."))`. Nome começa com `uq_` por convenção do projeto, mesmo sendo Index. Ver subseção nova na seção 2.
+
 ---
 
 ## 5. Credenciais / Infra (referência)
@@ -236,14 +274,15 @@ docker exec delivery-postgres-1 psql -U isv -d isv_delivery -c "SELECT ..."
 
 3 caminhos possíveis pra continuar — decisão é do Henrique baseada em prioridade de negócio:
 
-### Opção A — `Order` + `OrderItem` + `OrderItemAddon` (ciclo de pedido)
-Bloqueia o piloto. Depende de **todas** as 5 tabelas do ciclo Product (+ Customer + Address + Store). Ciclo grande, provavelmente 5-6 checkpoints:
-- `Order` (status enum, FK Customer + Store + Address, total_cents, public_id ISV-XXXX)
-- `OrderItem` (FK Order + ProductVariation, quantity, unit_price_cents SNAPSHOT)
-- `OrderItemAddon` (FK OrderItem + Addon, unit_price_cents SNAPSHOT)
-- `OrderStatusLog` (append-only — ADR-004: CreatedAtMixin sem UpdatedAt/SoftDelete)
+### Opção A — OrderItem + OrderItemAddon + OrderStatusLog (fase 2 do ciclo Order)
 
-**Desafio técnico:** snapshot de preços (preço do pedido ≠ preço atual do produto quando for consultado depois).
+Fase 1 concluída em commit 26d7243 (Order sozinho + migration + 31 testes). Fase 2 fecha o ciclo de pedido:
+
+- `OrderItem` — FK Order (CASCADE — composição) + FK ProductVariation (RESTRICT), snapshot de product_name/variation_name/unit_price_cents, quantity. Usa TimestampMixin + SoftDeleteMixin.
+- `OrderItemAddon` — FK OrderItem (CASCADE) + FK Addon (RESTRICT), snapshot de addon_name/unit_price_cents.
+- `OrderStatusLog` — primeiro modelo do projeto com `CreatedAtMixin` (append-only). FK Order (CASCADE), `from_status` nullable (NULL = criação do pedido), `to_status` NOT NULL, `reason` Text. CHECKs com `IS NULL OR` no from_status — ver ADR-019.
+
+**Desafio técnico:** snapshots de variation/addon seguem ADR-016 (preço + nome). OrderStatusLog é precedente de pattern append-only — testes precisam validar ausência de `updated_at` explicitamente.
 
 ### Opção B — Auth OTP + JWT + Sessions (backend começa a "viver")
 Muda o backend de schema-only pra API funcional. Não bloqueia ciclo Product mas destrava endpoints reais:
