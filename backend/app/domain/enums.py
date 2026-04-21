@@ -24,3 +24,28 @@ class AddressType(StrEnum):
     HOME = "home"
     WORK = "work"
     OTHER = "other"
+
+
+class TaxIdType(StrEnum):
+    """Tipo de documento fiscal (ADR-012)."""
+
+    CPF = "cpf"
+    CNPJ = "cnpj"
+
+
+class StoreStatus(StrEnum):
+    """Status operacional da Store (ADR-006).
+
+    Fluxo típico:
+    - pending: loja cadastrada, aguardando aprovação do admin
+    - approved: loja aprovada e operando
+    - rejected: admin rejeitou cadastro
+    - blocked: admin suspendeu temporariamente (ex: reclamações)
+    - paused: lojista pausou voluntariamente (ex: férias)
+    """
+
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    BLOCKED = "blocked"
+    PAUSED = "paused"
