@@ -1,0 +1,85 @@
+# === Ambiente ===
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# === Dependencias ===
+node_modules/
+.pnp.*
+.yarn/
+.pnpm-store/
+
+# === Python ===
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+.venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# === Flutter / Dart ===
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+pubspec.lock
+build/
+*.iml
+.idea/
+.vscode/
+
+# === Next.js ===
+.next/
+out/
+.vercel
+next-env.d.ts
+
+# === IDE ===
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# === Logs ===
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# === Secrets e chaves ===
+*.pem
+*.key
+*.p12
+*.mobileprovision
+*.jks
+google-services.json
+GoogleService-Info.plist
+service-account*.json
+
+# === Sistema ===
+.DS_Store
+Thumbs.db
+
+# === Banco local ===
+*.sqlite
+*.db
+
+# === Claude Code (local) ===
+.claude/settings.local.json
