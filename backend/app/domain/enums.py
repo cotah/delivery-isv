@@ -49,3 +49,33 @@ class StoreStatus(StrEnum):
     REJECTED = "rejected"
     BLOCKED = "blocked"
     PAUSED = "paused"
+
+
+class ProductStatus(StrEnum):
+    """Status operacional do produto (ADR-006, ADR-014).
+
+    Fluxo típico:
+    - active: disponível pra compra
+    - out_of_stock: esgotado temporariamente (lojista repõe depois)
+    - paused: lojista pausou voluntariamente (indefinido)
+    """
+
+    ACTIVE = "active"
+    OUT_OF_STOCK = "out_of_stock"
+    PAUSED = "paused"
+
+
+class AddonGroupType(StrEnum):
+    """Tipo de seleção em um grupo de adicionais (ADR-014).
+
+    - single: escolha única (ex: 'escolha a borda' — 1 borda só)
+    - multiple: escolha múltipla (ex: 'escolha até 3 frutas')
+
+    Limites quantitativos ficam em min_selections e max_selections
+    no grupo, independente do tipo:
+    - single: max_selections deve ser 1 (validado no modelo)
+    - multiple: max_selections >= 1
+    """
+
+    SINGLE = "single"
+    MULTIPLE = "multiple"

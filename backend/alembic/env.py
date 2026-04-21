@@ -14,7 +14,18 @@ from app.db.base import Base
 
 # Importe aqui todos os modelos para que Base.metadata os enxergue no autogenerate.
 # Adicione novas linhas conforme novos modelos forem criados.
-from app.models import address, category, city, customer, store  # noqa: F401
+from app.models import (  # noqa: F401
+    addon,
+    addon_group,
+    address,
+    category,
+    city,
+    customer,
+    product,
+    product_addon_group,
+    product_variation,
+    store,
+)
 
 config = context.config
 
