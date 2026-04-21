@@ -13,8 +13,8 @@ from app.core.config import get_settings
 from app.db.base import Base
 
 # Importe aqui todos os modelos para que Base.metadata os enxergue no autogenerate.
-# Ainda não há modelos — adicionar conforme forem criados.
-# from app.models import customer, store, order
+# Adicione novas linhas conforme novos modelos forem criados.
+from app.models import city  # noqa: F401
 
 config = context.config
 
