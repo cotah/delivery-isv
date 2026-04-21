@@ -16,3 +16,11 @@ class Environment(StrEnum):
     LOCAL = "local"
     STAGING = "staging"
     PRODUCTION = "production"
+
+
+class AddressType(StrEnum):
+    """Tipo de endereço do customer (ADR-006, ADR-011)."""
+
+    HOME = "home"
+    WORK = "work"
+    OTHER = "other"
