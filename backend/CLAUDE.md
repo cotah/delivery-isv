@@ -43,13 +43,25 @@
 15. `e16e2e9ee921` — create order_status_logs table
 
 ### Qualidade
-- **279 testes** passando em ~0.35s
-- **mypy strict** limpo em **57 source files**
+- **300 testes** passando em ~0.35s
+- **mypy strict** limpo em **75 source files**
 - **ruff check** + **ruff format** limpos
 - Zero `# noqa`, zero `# type: ignore`, zero warnings
 
+### API REST — primeiro endpoint funcional
+- **Versionamento:** `/api/v1/` (ADR-021)
+- **Estrutura em 4 camadas:** schemas → api/v1 → services → repositories → models (ADR-020)
+- **Endpoints implementados:** 1
+  - `GET /api/v1/stores` — lista lojas aprovadas com category/city aninhados, paginação offset/limit
+- **Padrões estabelecidos:**
+  - Formato de erro uniforme `{"error": {"code", "message", "details"}}` (ADR-022)
+  - Envelope de paginação `{"items", "total", "offset", "limit"}` (ADR-023)
+  - Relacionamentos via `lazy="raise"` + `selectinload` (N+1 vira bug detectável)
+  - `validation_alias` pro padrão "API expõe nome de usuário, modelo preserva semântica fiscal"
+  - Factories de teste com SAVEPOINT rollback + gerador programático de CNPJ
+
 ### Arquitetura documentada
-- **19 ADRs** em `C:\Users\henri\Documents\My second mind\Projetos\ISV Delivery\11 - Decisões Técnicas (log).md`
+- **24 ADRs** em `C:\Users\henri\Documents\My second mind\Projetos\ISV Delivery\11 - Decisões Técnicas (log).md`
 - 7 StrEnums em `app/domain/enums.py`: `Environment`, `AddressType`, `TaxIdType`, `StoreStatus`, `ProductStatus`, `AddonGroupType`, `OrderStatus`
 
 ---
@@ -283,29 +295,16 @@ docker exec delivery-postgres-1 psql -U isv -d isv_delivery -c "SELECT ..."
 
 ## 6. Próximo passo sugerido
 
-Ciclo Order completo — fundação de dados do MVP chegou ao fim. 15 tabelas cobrem:
-- Entidades de domínio (cities, customers, addresses, categories, stores)
-- Catálogo (products, product_variations, addon_groups, addons, product_addon_groups)
-- Fluxo de pedido (orders, order_items, order_item_addons, order_status_logs)
+**Status:** Catálogo público em construção (ADR-024). 1 de 3 endpoints concluído.
 
-Próximos caminhos possíveis — decisão do Henrique baseada em prioridade de negócio:
+**Próximos 2 endpoints** (mantêm a ordem definida no ADR-024):
+- **Checkpoint 2 — `GET /api/v1/stores/{store_id}`** (detalhe da loja): expõe mais campos do que a listagem (endereço, taxas de serviço), trata 404 quando store não existe ou foi deletada. Valida pattern de resposta de detalhe + tratamento de UUID inválido.
+- **Checkpoint 3 — `GET /api/v1/stores/{store_id}/products`** (cardápio): rota aninhada com produtos + variações + grupos de adicionais + adicionais. Primeiro endpoint com aninhamento de 3 níveis — exige decisão sobre eager loading, estrutura de resposta, trade-off entre payload denso vs múltiplas requests.
 
-### Opção A — API REST (endpoints HTTP) — começa a destravar integração
-Backend deixa de ser schema-only e vira API funcional. FastAPI + Pydantic schemas + service layer + repository pattern. Bloqueia frontend real.
-- Decisões a tomar: organização de endpoints, auth strategy, paginação, filtros, padrão de resposta de erro.
-
-### Opção B — Auth OTP + JWT + Sessions
-Login via SMS. Destrava qualquer endpoint protegido.
-- Decisões a tomar: provider SMS (Zenvia/Twilio/Total Voice), rate limit, expiração OTP, JWT rotation, refresh tokens.
-
-### Opção C — Driver (entregador) — ampliar schema em paralelo
-Modelo similar a Customer. Destrava recrutamento paralelo de entregadores pelo sócio comercial.
-- Pattern já estabelecido (PII + E.164 + anonymization stub).
-
-### Opção D — Coupon (cupom de desconto) — fechar lacuna do ciclo Order
-Order fase 2 já tem discount_cents e coupon_code_snapshot, mas sem modelo Coupon. Admin aplica manualmente via painel hoje. Modelar quando decidir formalizar.
-
-Recomendação minha: A ou B primeiro, depois C e D conforme priorização. A destrava frontend e experiência real; B destrava qualquer protected route. C e D são menos bloqueantes.
+**Depois do catálogo público completo** — ciclo grande seguinte (Henrique escolhe):
+- Auth OTP + JWT (SMS)
+- Endpoints de Customer (cadastro, endereço, preferências)
+- Endpoints de Order (criar, listar, acompanhar status)
 
 ---
 
