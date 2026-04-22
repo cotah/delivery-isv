@@ -4,10 +4,10 @@
 
 ---
 
-## 1. Estado atual (2026-04-21)
+## 1. Estado atual (2026-04-22)
 
 ### Schema de domínio
-**12 tabelas no Postgres:**
+**15 tabelas no Postgres:**
 - `cities` — 3 rows (seed MG: Tarumirim, Itanhomi, Alvarenga)
 - `customers` — 0 rows (produção real, sem seed)
 - `addresses` — 0 rows (depende de Customer)
@@ -19,10 +19,13 @@
 - `addons` — 0 rows
 - `product_addon_groups` — 0 rows (tabela de junção M:N)
 - `orders` — 0 rows (produção real, sem seed)
+- `order_items` — 0 rows (produção real)
+- `order_item_addons` — 0 rows (produção real)
+- `order_status_logs` — 0 rows (primeiro modelo append-only do projeto, ADR-019)
 - `alembic_version` — 1 row (controle do Alembic)
 
 ### Migrations
-**12 aplicadas** em sequência:
+**15 aplicadas** em sequência:
 1. `57aa2a205690` — create cities table
 2. `ffd2034a50bd` — seed mg cities
 3. `6ebc0349ab8c` — create customers table
@@ -35,10 +38,13 @@
 10. `11aa25d907f3` — create addon_groups and addons tables
 11. `c19dc1358909` — create product_addon_groups junction table
 12. `ce147e4e4268` — create orders table
+13. `9235020fd72d` — create order_items table
+14. `9fc0a1ebd6ab` — create order_item_addons table
+15. `e16e2e9ee921` — create order_status_logs table
 
 ### Qualidade
-- **222 testes** passando em ~0.35s
-- **mypy strict** limpo em **51 source files**
+- **279 testes** passando em ~0.35s
+- **mypy strict** limpo em **57 source files**
 - **ruff check** + **ruff format** limpos
 - Zero `# noqa`, zero `# type: ignore`, zero warnings
 
@@ -99,6 +105,11 @@ Estas regras saíram de ADRs e foram validadas empiricamente. **Desvio requer no
 | ProductAddonGroup → AddonGroup | composição (junção) | CASCADE |
 | Order → Customer | entidade | RESTRICT |
 | Order → Store | entidade | RESTRICT |
+| OrderItem → Order | composição | CASCADE |
+| OrderItem → ProductVariation | entidade (histórico) | RESTRICT |
+| OrderItemAddon → OrderItem | composição | CASCADE |
+| OrderItemAddon → Addon | entidade (histórico) | RESTRICT |
+| OrderStatusLog → Order | composição | CASCADE |
 
 ### UniqueConstraint multi-coluna
 **Armadilha:** `naming_convention` do metadata usa `%(column_0_name)s` pra UNIQUE — só pega a 1ª coluna, gerando nome ambíguo em constraints multi-coluna.
@@ -272,32 +283,29 @@ docker exec delivery-postgres-1 psql -U isv -d isv_delivery -c "SELECT ..."
 
 ## 6. Próximo passo sugerido
 
-3 caminhos possíveis pra continuar — decisão é do Henrique baseada em prioridade de negócio:
+Ciclo Order completo — fundação de dados do MVP chegou ao fim. 15 tabelas cobrem:
+- Entidades de domínio (cities, customers, addresses, categories, stores)
+- Catálogo (products, product_variations, addon_groups, addons, product_addon_groups)
+- Fluxo de pedido (orders, order_items, order_item_addons, order_status_logs)
 
-### Opção A — OrderItem + OrderItemAddon + OrderStatusLog (fase 2 do ciclo Order)
+Próximos caminhos possíveis — decisão do Henrique baseada em prioridade de negócio:
 
-Fase 1 concluída em commit 26d7243 (Order sozinho + migration + 31 testes). Fase 2 fecha o ciclo de pedido:
+### Opção A — API REST (endpoints HTTP) — começa a destravar integração
+Backend deixa de ser schema-only e vira API funcional. FastAPI + Pydantic schemas + service layer + repository pattern. Bloqueia frontend real.
+- Decisões a tomar: organização de endpoints, auth strategy, paginação, filtros, padrão de resposta de erro.
 
-- `OrderItem` — FK Order (CASCADE — composição) + FK ProductVariation (RESTRICT), snapshot de product_name/variation_name/unit_price_cents, quantity. Usa TimestampMixin + SoftDeleteMixin.
-- `OrderItemAddon` — FK OrderItem (CASCADE) + FK Addon (RESTRICT), snapshot de addon_name/unit_price_cents.
-- `OrderStatusLog` — primeiro modelo do projeto com `CreatedAtMixin` (append-only). FK Order (CASCADE), `from_status` nullable (NULL = criação do pedido), `to_status` NOT NULL, `reason` Text. CHECKs com `IS NULL OR` no from_status — ver ADR-019.
+### Opção B — Auth OTP + JWT + Sessions
+Login via SMS. Destrava qualquer endpoint protegido.
+- Decisões a tomar: provider SMS (Zenvia/Twilio/Total Voice), rate limit, expiração OTP, JWT rotation, refresh tokens.
 
-**Desafio técnico:** snapshots de variation/addon seguem ADR-016 (preço + nome). OrderStatusLog é precedente de pattern append-only — testes precisam validar ausência de `updated_at` explicitamente.
+### Opção C — Driver (entregador) — ampliar schema em paralelo
+Modelo similar a Customer. Destrava recrutamento paralelo de entregadores pelo sócio comercial.
+- Pattern já estabelecido (PII + E.164 + anonymization stub).
 
-### Opção B — Auth OTP + JWT + Sessions (backend começa a "viver")
-Muda o backend de schema-only pra API funcional. Não bloqueia ciclo Product mas destrava endpoints reais:
-- Serviço de OTP via SMS (integração com Zenvia/Twilio/Total Voice)
-- Geração/validação de JWT (pode usar `pyjwt` ou similar)
-- Middleware FastAPI pra autenticação
-- Endpoint `POST /auth/request-otp` + `POST /auth/verify-otp`
-- Talvez modelo `OtpRequest` pra rate-limiting e auditoria
+### Opção D — Coupon (cupom de desconto) — fechar lacuna do ciclo Order
+Order fase 2 já tem discount_cents e coupon_code_snapshot, mas sem modelo Coupon. Admin aplica manualmente via painel hoje. Modelar quando decidir formalizar.
 
-**Desafio técnico:** escolher provider SMS + gerenciar chave API + rate limit + expiração de OTP.
-
-### Opção C — `Driver` (entregador) — paralelo ao Order
-Similar a Customer mas com campos próprios (CNH, placa do veículo, status_online, etc.). Independente do ciclo Product. Pattern já estabelecido (PII + E.164 + anonymization stub).
-
-**Recomendação minha:** Opção A se o objetivo é destravar o piloto real (pedido completo em Tarumirim). Opção B se a prioridade é começar a ter endpoints HTTP reais. Opção C se quiser paralelizar com o sócio recrutando entregadores.
+Recomendação minha: A ou B primeiro, depois C e D conforme priorização. A destrava frontend e experiência real; B destrava qualquer protected route. C e D são menos bloqueantes.
 
 ---
 
