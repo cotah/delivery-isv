@@ -24,6 +24,7 @@ from app.models import (  # noqa: F401
     order,
     order_item,
     order_item_addon,
+    order_status_log,
     product,
     product_addon_group,
     product_variation,
