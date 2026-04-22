@@ -23,6 +23,7 @@ from app.models import (  # noqa: F401
     customer,
     order,
     order_item,
+    order_item_addon,
     product,
     product_addon_group,
     product_variation,
