@@ -43,22 +43,24 @@
 15. `e16e2e9ee921` — create order_status_logs table
 
 ### Qualidade
-- **300 testes** passando em ~0.35s
+- **316 testes** passando em ~0.35s
 - **mypy strict** limpo em **75 source files**
 - **ruff check** + **ruff format** limpos
 - Zero `# noqa`, zero `# type: ignore`, zero warnings
 
-### API REST — primeiro endpoint funcional
+### API REST — catálogo público em construção
 - **Versionamento:** `/api/v1/` (ADR-021)
 - **Estrutura em 4 camadas:** schemas → api/v1 → services → repositories → models (ADR-020)
-- **Endpoints implementados:** 1
+- **Endpoints implementados:** 2
   - `GET /api/v1/stores` — lista lojas aprovadas com category/city aninhados, paginação offset/limit
+  - `GET /api/v1/stores/{store_id}` — detalhe com endereço completo, 404 `store_not_found` específico, 404 opaco pra soft-deleted (ADR-022)
 - **Padrões estabelecidos:**
   - Formato de erro uniforme `{"error": {"code", "message", "details"}}` (ADR-022)
   - Envelope de paginação `{"items", "total", "offset", "limit"}` (ADR-023)
   - Relacionamentos via `lazy="raise"` + `selectinload` (N+1 vira bug detectável)
   - `validation_alias` pro padrão "API expõe nome de usuário, modelo preserva semântica fiscal"
   - Factories de teste com SAVEPOINT rollback + gerador programático de CNPJ
+  - HTTPException com detail dict `{code, message}` — handler detecta e usa code específico (ex: `store_not_found`). Reusável para qualquer endpoint futuro sem mudar handler.
 
 ### Arquitetura documentada
 - **24 ADRs** em `C:\Users\henri\Documents\My second mind\Projetos\ISV Delivery\11 - Decisões Técnicas (log).md`
@@ -295,10 +297,9 @@ docker exec delivery-postgres-1 psql -U isv -d isv_delivery -c "SELECT ..."
 
 ## 6. Próximo passo sugerido
 
-**Status:** Catálogo público em construção (ADR-024). 1 de 3 endpoints concluído.
+**Status:** Catálogo público em construção (ADR-024). 2 de 3 endpoints concluídos.
 
-**Próximos 2 endpoints** (mantêm a ordem definida no ADR-024):
-- **Checkpoint 2 — `GET /api/v1/stores/{store_id}`** (detalhe da loja): expõe mais campos do que a listagem (endereço, taxas de serviço), trata 404 quando store não existe ou foi deletada. Valida pattern de resposta de detalhe + tratamento de UUID inválido.
+**Próximo endpoint** (fecha o catálogo público):
 - **Checkpoint 3 — `GET /api/v1/stores/{store_id}/products`** (cardápio): rota aninhada com produtos + variações + grupos de adicionais + adicionais. Primeiro endpoint com aninhamento de 3 níveis — exige decisão sobre eager loading, estrutura de resposta, trade-off entre payload denso vs múltiplas requests.
 
 **Depois do catálogo público completo** — ciclo grande seguinte (Henrique escolhe):
