@@ -43,17 +43,18 @@
 15. `e16e2e9ee921` — create order_status_logs table
 
 ### Qualidade
-- **316 testes** passando em ~0.35s
-- **mypy strict** limpo em **75 source files**
+- **345 testes** passando em ~1.2s
+- **mypy strict** limpo em **80 source files**
 - **ruff check** + **ruff format** limpos
 - Zero `# noqa`, zero `# type: ignore`, zero warnings
 
-### API REST — catálogo público em construção
+### API REST — catálogo público completo
 - **Versionamento:** `/api/v1/` (ADR-021)
 - **Estrutura em 4 camadas:** schemas → api/v1 → services → repositories → models (ADR-020)
-- **Endpoints implementados:** 2
+- **Endpoints implementados:** 3
   - `GET /api/v1/stores` — lista lojas aprovadas com category/city aninhados, paginação offset/limit
   - `GET /api/v1/stores/{store_id}` — detalhe com endereço completo, 404 `store_not_found` específico, 404 opaco pra soft-deleted (ADR-022)
+  - `GET /api/v1/stores/{store_id}/products` — cardápio aninhado 3 níveis (produto → variações + grupos de adicionais → adicionais), is_available calculado, ordenação alfabética placeholder, limit query param default 500 max 1000 (ADR-024 variante sem paginação tradicional)
 - **Padrões estabelecidos:**
   - Formato de erro uniforme `{"error": {"code", "message", "details"}}` (ADR-022)
   - Envelope de paginação `{"items", "total", "offset", "limit"}` (ADR-023)
@@ -61,6 +62,9 @@
   - `validation_alias` pro padrão "API expõe nome de usuário, modelo preserva semântica fiscal"
   - Factories de teste com SAVEPOINT rollback + gerador programático de CNPJ
   - HTTPException com detail dict `{code, message}` — handler detecta e usa code específico (ex: `store_not_found`). Reusável para qualquer endpoint futuro sem mudar handler.
+  - Relationships M:N via `secondary="tabela_junção"` — schema consumidor não vê tabela associativa (pattern AddonGroup em Product)
+  - Aninhamento 3 níveis com `selectinload` em cadeia — queries O(N) fixas independente do tamanho do cardápio
+  - Filtros de soft-delete no service (Python, não SQL) quando eager load traz tudo — simples e flexível
 
 ### Arquitetura documentada
 - **24 ADRs** em `C:\Users\henri\Documents\My second mind\Projetos\ISV Delivery\11 - Decisões Técnicas (log).md`
@@ -297,15 +301,33 @@ docker exec delivery-postgres-1 psql -U isv -d isv_delivery -c "SELECT ..."
 
 ## 6. Próximo passo sugerido
 
-**Status:** Catálogo público em construção (ADR-024). 2 de 3 endpoints concluídos.
+**Status:** Catálogo público completo (ADR-024). 3/3 endpoints concluídos.
+- GET /api/v1/stores (lista)
+- GET /api/v1/stores/{id} (detalhe)
+- GET /api/v1/stores/{id}/products (cardápio aninhado)
 
-**Próximo endpoint** (fecha o catálogo público):
-- **Checkpoint 3 — `GET /api/v1/stores/{store_id}/products`** (cardápio): rota aninhada com produtos + variações + grupos de adicionais + adicionais. Primeiro endpoint com aninhamento de 3 níveis — exige decisão sobre eager loading, estrutura de resposta, trade-off entre payload denso vs múltiplas requests.
+Backend tem agora catálogo público funcional — um app mobile (quando for construído) tem o suficiente pra renderizar tela de lista de lojas, detalhe da loja e cardápio.
 
-**Depois do catálogo público completo** — ciclo grande seguinte (Henrique escolhe):
-- Auth OTP + JWT (SMS)
-- Endpoints de Customer (cadastro, endereço, preferências)
-- Endpoints de Order (criar, listar, acompanhar status)
+**Próximo ciclo grande — Henrique escolhe:**
+
+**A — Auth OTP + JWT (login via SMS)**
+Destrava qualquer rota protegida. Primeiro passo pra endpoints de Customer e Order (que dependem de identidade). Decisões pendentes: provider SMS (Zenvia/Twilio/Total Voice), rate limit, expiração OTP, JWT rotation, refresh tokens.
+
+**B — Endpoints de Customer (cadastro, endereço, preferências)**
+Requer Auth primeiro — ciclo A. Pode ser feito logo em seguida.
+
+**C — Endpoints de Order (criar, listar, acompanhar status)**
+Requer Auth + Customer. Ciclo mais complexo — envolve snapshot granular do pedido (ADR-016), máquina de estados (ADR-017), integração com gateway de pagamento.
+
+**D — Débitos técnicos pré-piloto (HIGH priority)**
+Ver subseção dedicada no vault roadmap. 3 débitos acumulados:
+- Expansão Store (description, phone, opening_hours, min_order, imagens)
+- Organização do cardápio (display_order, menu_section, featured)
+- Toggle individual de ProductVariation (status + ProductVariationStatus enum)
+
+Fazer débitos antes do piloto é mandatório — sem eles, UX fica abaixo do padrão iFood/Rappi.
+
+Recomendação ordenada: **A → B → (D opcional em paralelo) → C**. Auth destrava o maior volume de trabalho pendente. Débitos pré-piloto cabem entre ciclos sem bloquear progresso.
 
 ---
 
