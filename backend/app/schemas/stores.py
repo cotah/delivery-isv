@@ -60,6 +60,38 @@ class StoreRead(BaseModel):
     city: CitySummary
 
 
+class StoreDetail(BaseModel):
+    """Detalhe da loja (ADR-022, ADR-024). Exposto em GET /stores/{id}.
+
+    Expande StoreRead com endereço completo (street, number, complement, zip_code).
+    Campos de negócio (description, opening_hours, minimum_order, cover_image, phone)
+    NÃO existem no modelo Store atual — débito técnico documentado, ciclo próprio
+    antes do piloto. Por ora detalhe expande apenas endereço granular.
+
+    Continua NÃO expondo:
+    - legal_name (razão social — fiscal)
+    - tax_id, tax_id_type (PII fiscal, ADR-012)
+    - status (rota filtra APPROVED, implícito)
+    - is_active (campo interno)
+    - created_at, updated_at, deleted_at (timestamps internos)
+
+    zip_code retornado crú (8 dígitos sem hífen) — frontend formata.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    name: str = Field(..., validation_alias="trade_name", examples=["Pizzaria do Zé"])
+    slug: str = Field(..., examples=["pizzaria-do-ze"])
+    street: str = Field(..., examples=["Rua das Flores"])
+    number: str = Field(..., examples=["123"])
+    complement: str | None = Field(None, examples=["Loja 2"])
+    neighborhood: str = Field(..., examples=["Centro"])
+    zip_code: str = Field(..., examples=["35855000"], description="CEP com 8 dígitos sem hífen")
+    category: CategorySummary
+    city: CitySummary
+
+
 class StoreListQuery(BaseModel):
     """Query params de GET /stores (ADR-023)."""
 

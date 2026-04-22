@@ -100,3 +100,64 @@ class TestListActiveStores:
         assert items[0].id == s3.id
         assert items[1].id == s2.id
         assert items[2].id == s1.id
+
+
+class TestGetActiveStore:
+    def test_returns_store_when_approved(
+        self,
+        db_session: Session,
+        store_factory: Any,
+    ) -> None:
+        store = store_factory(status=StoreStatus.APPROVED)
+
+        result = stores_repository.get_active_store(db_session, store.id)
+
+        assert result is not None
+        assert result.id == store.id
+
+    def test_returns_none_when_uuid_does_not_exist(self, db_session: Session) -> None:
+        import uuid
+
+        result = stores_repository.get_active_store(db_session, uuid.uuid4())
+        assert result is None
+
+    def test_returns_none_when_pending(
+        self,
+        db_session: Session,
+        store_factory: Any,
+    ) -> None:
+        store = store_factory(status=StoreStatus.PENDING)
+        result = stores_repository.get_active_store(db_session, store.id)
+        assert result is None
+
+    def test_returns_none_when_rejected(
+        self,
+        db_session: Session,
+        store_factory: Any,
+    ) -> None:
+        store = store_factory(status=StoreStatus.REJECTED)
+        result = stores_repository.get_active_store(db_session, store.id)
+        assert result is None
+
+    def test_returns_none_when_soft_deleted(
+        self,
+        db_session: Session,
+        store_factory: Any,
+    ) -> None:
+        store = store_factory(status=StoreStatus.APPROVED)
+        store.deleted_at = datetime.now(UTC)
+        db_session.flush()
+        result = stores_repository.get_active_store(db_session, store.id)
+        assert result is None
+
+    def test_eager_loads_category_and_city(
+        self,
+        db_session: Session,
+        store_factory: Any,
+    ) -> None:
+        """N+1 protection: lazy='raise' + selectinload."""
+        store = store_factory(status=StoreStatus.APPROVED)
+        result = stores_repository.get_active_store(db_session, store.id)
+        assert result is not None
+        assert result.category.name is not None
+        assert result.city.name is not None

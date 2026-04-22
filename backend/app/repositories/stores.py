@@ -1,5 +1,7 @@
 """Queries ORM de Store (ADR-020 layer: repository)."""
 
+from uuid import UUID
+
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
@@ -50,3 +52,34 @@ def list_active_stores(
     total = session.execute(total_stmt).scalar_one()
 
     return items, total
+
+
+def get_active_store(
+    session: Session,
+    store_id: UUID,
+) -> Store | None:
+    """Busca Store aprovada e não-deletada por UUID.
+
+    Retorna None se:
+    - UUID não existe no banco
+    - Store existe mas status != APPROVED
+    - Store foi soft-deletada (deleted_at IS NOT NULL)
+
+    Segurança: não diferencia "nunca existiu" de "removida" — retorno None
+    uniforme preserva opacidade do UUID (ADR-024).
+
+    Eager load (ADR-014): selectinload de category e city.
+    """
+    stmt = (
+        select(Store)
+        .where(
+            Store.id == store_id,
+            Store.status == StoreStatus.APPROVED,
+            Store.deleted_at.is_(None),
+        )
+        .options(
+            selectinload(Store.category),
+            selectinload(Store.city),
+        )
+    )
+    return session.execute(stmt).scalar_one_or_none()

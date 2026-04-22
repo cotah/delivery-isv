@@ -28,6 +28,7 @@ class ErrorCode(StrEnum):
 
     VALIDATION_FAILED = "validation_failed"
     NOT_FOUND = "not_found"
+    STORE_NOT_FOUND = "store_not_found"
     INTERNAL_ERROR = "internal_error"
 
 
@@ -74,12 +75,23 @@ async def http_exception_handler(
     request: Request,
     exc: StarletteHTTPException,
 ) -> JSONResponse:
-    """Converte HTTPException pro formato do ADR-022."""
-    code_map = {
-        404: ErrorCode.NOT_FOUND.value,
-    }
-    code = code_map.get(exc.status_code, ErrorCode.INTERNAL_ERROR.value)
-    message = str(exc.detail) if exc.detail else "Erro desconhecido"
+    """Converte HTTPException pro formato do ADR-022.
+
+    Suporta 2 formas de `exc.detail`:
+    - dict com keys 'code' e 'message': endpoint customizou o erro (code
+      específico tipo 'store_not_found'). Usa direto.
+    - qualquer outro valor: fallback pelo status_code (code_map) + detail
+      serializado como string (preserva comportamento default do FastAPI).
+    """
+    if isinstance(exc.detail, dict) and "code" in exc.detail and "message" in exc.detail:
+        code = exc.detail["code"]
+        message = exc.detail["message"]
+    else:
+        code_map = {
+            404: ErrorCode.NOT_FOUND.value,
+        }
+        code = code_map.get(exc.status_code, ErrorCode.INTERNAL_ERROR.value)
+        message = str(exc.detail) if exc.detail else "Erro desconhecido"
     return _build_response(exc.status_code, code, message)
 
 
