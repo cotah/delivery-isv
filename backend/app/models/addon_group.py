@@ -1,3 +1,4 @@
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 from sqlalchemy import (
@@ -7,12 +8,15 @@ from sqlalchemy import (
     Integer,
     String,
 )
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
 from app.db.mixins import SoftDeleteMixin, TimestampMixin
 from app.db.types import UUIDPK
 from app.domain.enums import AddonGroupType
+
+if TYPE_CHECKING:
+    from app.models.addon import Addon
 
 # CHECK constraint gerada do enum (ADR-006)
 _ADDON_GROUP_TYPE_CHECK = "type IN (" + ", ".join(f"'{t.value}'" for t in AddonGroupType) + ")"
@@ -71,6 +75,10 @@ class AddonGroup(Base, TimestampMixin, SoftDeleteMixin):
         default=0,
         server_default="0",
     )
+
+    # ORM relationship — lazy="raise" força eager load explícito (selectinload)
+    # pra cadeia Product.addon_groups → AddonGroup.addons.
+    addons: Mapped[list["Addon"]] = relationship("Addon", lazy="raise")
 
     __table_args__ = (
         CheckConstraint(_ADDON_GROUP_TYPE_CHECK, name="type"),

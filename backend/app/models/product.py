@@ -1,3 +1,4 @@
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 from sqlalchemy import (
@@ -8,12 +9,17 @@ from sqlalchemy import (
     String,
     Text,
 )
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
 from app.db.mixins import SoftDeleteMixin, TimestampMixin
 from app.db.types import UUIDPK
 from app.domain.enums import ProductStatus
+
+if TYPE_CHECKING:
+    from app.models.addon_group import AddonGroup
+    from app.models.product_variation import ProductVariation
+    from app.models.store import Store
 
 # CHECK constraint gerada dinamicamente do enum (ADR-006)
 _PRODUCT_STATUS_CHECK = "status IN (" + ", ".join(f"'{s.value}'" for s in ProductStatus) + ")"
@@ -61,6 +67,19 @@ class Product(Base, TimestampMixin, SoftDeleteMixin):
     preparation_minutes: Mapped[int | None] = mapped_column(
         Integer,
         nullable=True,
+    )
+
+    # ORM relationships — lazy="raise" obriga eager load explícito (selectinload).
+    # N+1 vira bug detectável em vez de silencioso.
+    store: Mapped["Store"] = relationship("Store", lazy="raise")
+    variations: Mapped[list["ProductVariation"]] = relationship(
+        "ProductVariation",
+        lazy="raise",
+    )
+    addon_groups: Mapped[list["AddonGroup"]] = relationship(
+        "AddonGroup",
+        secondary="product_addon_groups",
+        lazy="raise",
     )
 
     __table_args__ = (

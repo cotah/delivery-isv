@@ -3,12 +3,14 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db_session
 from app.api.errors import ErrorCode, ErrorResponse
+from app.schemas.products import ProductListResponse
 from app.schemas.stores import StoreDetail, StoreListQuery, StoreListResponse
+from app.services import products as products_service
 from app.services import stores as stores_service
 
 router = APIRouter(prefix="/stores", tags=["stores"])
@@ -68,3 +70,47 @@ def get_store(
             },
         )
     return store
+
+
+@router.get(
+    "/{store_id}/products",
+    response_model=ProductListResponse,
+    summary="Cardápio da loja",
+    description=(
+        "Retorna o cardápio completo da loja aprovada, com produtos, variações e "
+        "adicionais aninhados. Produtos e variações PAUSED ficam escondidos. "
+        "Produtos OUT_OF_STOCK aparecem com is_available=false. Não pagina "
+        "tradicionalmente — query param `limit` (default 500, max 1000) como "
+        "limite de segurança. Retorna 404 se loja não existe, não está aprovada "
+        "ou foi removida. Endpoint público — não exige autenticação."
+    ),
+    responses={
+        404: {
+            "model": ErrorResponse,
+            "description": "Loja não encontrada",
+        },
+        422: {
+            "model": ErrorResponse,
+            "description": "store_id inválido ou limit fora de faixa",
+        },
+    },
+)
+def list_store_products_endpoint(
+    store_id: UUID,
+    session: Annotated[Session, Depends(get_db_session)],
+    limit: Annotated[int, Query(ge=1, le=1000)] = 500,
+) -> ProductListResponse:
+    result = products_service.list_store_products(
+        session=session,
+        store_id=store_id,
+        limit=limit,
+    )
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": ErrorCode.STORE_NOT_FOUND.value,
+                "message": "Loja não encontrada",
+            },
+        )
+    return result

@@ -105,6 +105,125 @@ def category_factory(db_session: Session) -> Any:
 
 
 @pytest.fixture
+def product_factory(db_session: Session, store_factory: Any) -> Any:
+    """Cria um Product pra testes. Status default ACTIVE."""
+    from app.domain.enums import ProductStatus
+    from app.models.product import Product
+
+    def _create(**overrides: Any) -> Product:
+        suffix = uuid.uuid4().hex[:6]
+        store = overrides.pop("store", None) or store_factory()
+        defaults: dict[str, Any] = {
+            "id": uuid.uuid4(),
+            "store_id": store.id,
+            "name": f"Produto {suffix}",
+            "status": ProductStatus.ACTIVE,
+        }
+        defaults.update(overrides)
+        product = Product(**defaults)
+        db_session.add(product)
+        db_session.flush()
+        return product
+
+    return _create
+
+
+@pytest.fixture
+def product_variation_factory(db_session: Session) -> Any:
+    """Cria uma ProductVariation (exige product explícito)."""
+    from app.models.product_variation import ProductVariation
+
+    def _create(product: Any, **overrides: Any) -> ProductVariation:
+        suffix = uuid.uuid4().hex[:6]
+        defaults: dict[str, Any] = {
+            "id": uuid.uuid4(),
+            "product_id": product.id,
+            "name": f"Variação {suffix}",
+            "price_cents": 1000,
+            "sort_order": 0,
+        }
+        defaults.update(overrides)
+        v = ProductVariation(**defaults)
+        db_session.add(v)
+        db_session.flush()
+        return v
+
+    return _create
+
+
+@pytest.fixture
+def addon_group_factory(db_session: Session, store_factory: Any) -> Any:
+    """Cria um AddonGroup pra testes. Tipo default SINGLE."""
+    from app.domain.enums import AddonGroupType
+    from app.models.addon_group import AddonGroup
+
+    def _create(**overrides: Any) -> AddonGroup:
+        suffix = uuid.uuid4().hex[:6]
+        store = overrides.pop("store", None) or store_factory()
+        defaults: dict[str, Any] = {
+            "id": uuid.uuid4(),
+            "store_id": store.id,
+            "name": f"Grupo {suffix}",
+            "type": AddonGroupType.SINGLE.value,
+            "min_selections": 0,
+            "max_selections": 1,
+            "sort_order": 0,
+        }
+        defaults.update(overrides)
+        g = AddonGroup(**defaults)
+        db_session.add(g)
+        db_session.flush()
+        return g
+
+    return _create
+
+
+@pytest.fixture
+def addon_factory(db_session: Session) -> Any:
+    """Cria um Addon (exige group explícito)."""
+    from app.models.addon import Addon
+
+    def _create(group: Any, **overrides: Any) -> Addon:
+        suffix = uuid.uuid4().hex[:6]
+        defaults: dict[str, Any] = {
+            "id": uuid.uuid4(),
+            "group_id": group.id,
+            "name": f"Adicional {suffix}",
+            "price_cents": 500,
+            "is_available": True,
+            "sort_order": 0,
+        }
+        defaults.update(overrides)
+        a = Addon(**defaults)
+        db_session.add(a)
+        db_session.flush()
+        return a
+
+    return _create
+
+
+@pytest.fixture
+def product_addon_group_factory(db_session: Session) -> Any:
+    """Cria a junção M:N ProductAddonGroup (exige product e group explícitos)."""
+    from app.models.product_addon_group import ProductAddonGroup
+
+    def _create(product: Any, group: Any, **overrides: Any) -> ProductAddonGroup:
+        defaults: dict[str, Any] = {
+            "id": uuid.uuid4(),
+            "product_id": product.id,
+            "group_id": group.id,
+            "sort_order": 0,
+        }
+        defaults.update(overrides)
+        pag = ProductAddonGroup(**defaults)
+        db_session.add(pag)
+        db_session.flush()
+        return pag
+
+    return _create
+
+
+@pytest.fixture
 def store_factory(
     db_session: Session,
     city_factory: Any,
