@@ -7,7 +7,8 @@ APIRouter e é incluído aqui em checkpoints subsequentes.
 
 from fastapi import APIRouter
 
+from app.api.v1 import stores
+
 router = APIRouter(prefix="/api/v1")
 
-# Rotas individuais serão incluídas aqui em checkpoints seguintes.
-# Ex: router.include_router(stores.router)  # Checkpoint 1b
+router.include_router(stores.router)

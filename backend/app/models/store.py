@@ -1,3 +1,4 @@
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 from sqlalchemy import (
@@ -7,13 +8,17 @@ from sqlalchemy import (
     Index,
     String,
 )
-from sqlalchemy.orm import Mapped, mapped_column, validates
+from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
 from app.db.base import Base
 from app.db.mixins import SoftDeleteMixin, TimestampMixin
 from app.db.types import UUIDPK
 from app.domain.enums import StoreStatus, TaxIdType
 from app.utils.validators import mask_tax_id_for_log, validate_tax_id
+
+if TYPE_CHECKING:
+    from app.models.category import Category
+    from app.models.city import City
 
 # CHECK constraints geradas dinamicamente dos enums (fonte única de verdade)
 _STATUS_CHECK = "status IN (" + ", ".join(f"'{s.value}'" for s in StoreStatus) + ")"
@@ -73,6 +78,12 @@ class Store(Base, TimestampMixin, SoftDeleteMixin):
         ForeignKey("cities.id", ondelete="RESTRICT"),
         nullable=False,
     )
+
+    # ORM relationships — lazy="raise" obriga eager load explícito (selectinload/
+    # joinedload). Query sem eager load levanta InvalidRequestError em vez de
+    # silenciosamente disparar N+1 query por linha.
+    category: Mapped["Category"] = relationship("Category", lazy="raise")
+    city: Mapped["City"] = relationship("City", lazy="raise")
 
     # Endereço textual (não reusa Address — ver docstring)
     street: Mapped[str] = mapped_column(String(200), nullable=False)
