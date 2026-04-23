@@ -4,10 +4,10 @@
 
 ---
 
-## 1. Estado atual (2026-04-22)
+## 1. Estado atual (2026-04-23)
 
 ### Schema de domínio
-**15 tabelas no Postgres:**
+**17 tabelas no Postgres:**
 - `cities` — 3 rows (seed MG: Tarumirim, Itanhomi, Alvarenga)
 - `customers` — 0 rows (produção real, sem seed)
 - `addresses` — 0 rows (depende de Customer)
@@ -22,10 +22,12 @@
 - `order_items` — 0 rows (produção real)
 - `order_item_addons` — 0 rows (produção real)
 - `order_status_logs` — 0 rows (primeiro modelo append-only do projeto, ADR-019)
+- `users` — 0 rows (identidade via OTP, ADR-025)
+- `otp_codes` — 0 rows (códigos OTP descartáveis, ADR-025)
 - `alembic_version` — 1 row (controle do Alembic)
 
 ### Migrations
-**15 aplicadas** em sequência:
+**16 aplicadas** em sequência:
 1. `57aa2a205690` — create cities table
 2. `ffd2034a50bd` — seed mg cities
 3. `6ebc0349ab8c` — create customers table
@@ -41,14 +43,15 @@
 13. `9235020fd72d` — create order_items table
 14. `9fc0a1ebd6ab` — create order_item_addons table
 15. `e16e2e9ee921` — create order_status_logs table
+16. `2e0d02f42dab` — create users and otp_codes tables
 
 ### Qualidade
-- **345 testes** passando em ~1.2s
-- **mypy strict** limpo em **80 source files**
+- **364 testes** passando em ~1.2s
+- **mypy strict** limpo em **85 source files**
 - **ruff check** + **ruff format** limpos
 - Zero `# noqa`, zero `# type: ignore`, zero warnings
 
-### API REST — catálogo público completo
+### API REST — catálogo público completo + Auth em construção
 - **Versionamento:** `/api/v1/` (ADR-021)
 - **Estrutura em 4 camadas:** schemas → api/v1 → services → repositories → models (ADR-020)
 - **Endpoints implementados:** 3
@@ -66,8 +69,19 @@
   - Aninhamento 3 níveis com `selectinload` em cadeia — queries O(N) fixas independente do tamanho do cardápio
   - Filtros de soft-delete no service (Python, não SQL) quando eager load traz tudo — simples e flexível
 
+**Ciclo Auth (ADR-025) em construção. Checkpoint 1/4 concluído:**
+- User model (identidade pura, phone E.164 UNIQUE)
+- OtpCode model (código descartável com sha256 hash, attempts counter, expires_at, consumed_at)
+- Migration 2e0d02f42dab aplicada
+- Sem endpoints ainda — request-otp/verify-otp vêm no Checkpoint 3
+
+Padrões estabelecidos no Checkpoint 1 Auth:
+- `generate_valid_phone_e164()` em tests/utils/phone.py — helper pra factories que precisam de phone E.164 único (análogo ao tax_id.py existente)
+- Pattern `@validates("phone")` com `_key: str` (underscore prefix) — ruff ARG001 compliance
+- DateTime(timezone=True) como padrão em novos models (consistência com TimestampMixin)
+
 ### Arquitetura documentada
-- **24 ADRs** em `C:\Users\henri\Documents\My second mind\Projetos\ISV Delivery\11 - Decisões Técnicas (log).md`
+- **25 ADRs** em `C:\Users\henri\Documents\My second mind\Projetos\ISV Delivery\11 - Decisões Técnicas (log).md`
 - 7 StrEnums em `app/domain/enums.py`: `Environment`, `AddressType`, `TaxIdType`, `StoreStatus`, `ProductStatus`, `AddonGroupType`, `OrderStatus`
 
 ---
@@ -301,33 +315,23 @@ docker exec delivery-postgres-1 psql -U isv -d isv_delivery -c "SELECT ..."
 
 ## 6. Próximo passo sugerido
 
-**Status:** Catálogo público completo (ADR-024). 3/3 endpoints concluídos.
-- GET /api/v1/stores (lista)
-- GET /api/v1/stores/{id} (detalhe)
-- GET /api/v1/stores/{id}/products (cardápio aninhado)
+**Status:** Auth em construção. Checkpoint 1/4 concluído (modelos User + OtpCode).
 
-Backend tem agora catálogo público funcional — um app mobile (quando for construído) tem o suficiente pra renderizar tela de lista de lojas, detalhe da loja e cardápio.
+**Próximos checkpoints do Ciclo Auth (ADR-025):**
 
-**Próximo ciclo grande — Henrique escolhe:**
+**Checkpoint 2 — SMSProvider Protocol + MockSMSProvider**
+Interface abstrata pra envio de SMS (Protocol do typing), implementação mock que imprime código no log estruturado (desenvolvimento), env var SMS_PROVIDER=mock pra injeção. Real provider (Zenvia) vira Checkpoint 2b quando CNPJ sair — troca de 1 env var.
 
-**A — Auth OTP + JWT (login via SMS)**
-Destrava qualquer rota protegida. Primeiro passo pra endpoints de Customer e Order (que dependem de identidade). Decisões pendentes: provider SMS (Zenvia/Twilio/Total Voice), rate limit, expiração OTP, JWT rotation, refresh tokens.
+**Checkpoint 3 — Endpoints /auth/request-otp + /auth/verify-otp com rate limit**
+POST /api/v1/auth/request-otp (valida E.164, cria OtpCode, chama SMSProvider). POST /api/v1/auth/verify-otp (valida hash + attempts + expires_at, cria User lazy, retorna JWT). Rate limit via slowapi + Redis (3/h phone, 10/h IP em request-otp; 10/h phone, 30/h IP em verify-otp).
 
-**B — Endpoints de Customer (cadastro, endereço, preferências)**
-Requer Auth primeiro — ciclo A. Pode ser feito logo em seguida.
+**Checkpoint 4 — Middleware JWT + GET /api/v1/users/me**
+get_current_user dependency, rota protegida de exemplo, tratamento 401 (token ausente/inválido/expirado).
 
-**C — Endpoints de Order (criar, listar, acompanhar status)**
-Requer Auth + Customer. Ciclo mais complexo — envolve snapshot granular do pedido (ADR-016), máquina de estados (ADR-017), integração com gateway de pagamento.
-
-**D — Débitos técnicos pré-piloto (HIGH priority)**
-Ver subseção dedicada no vault roadmap. 3 débitos acumulados:
-- Expansão Store (description, phone, opening_hours, min_order, imagens)
-- Organização do cardápio (display_order, menu_section, featured)
-- Toggle individual de ProductVariation (status + ProductVariationStatus enum)
-
-Fazer débitos antes do piloto é mandatório — sem eles, UX fica abaixo do padrão iFood/Rappi.
-
-Recomendação ordenada: **A → B → (D opcional em paralelo) → C**. Auth destrava o maior volume de trabalho pendente. Débitos pré-piloto cabem entre ciclos sem bloquear progresso.
+**Depois do Ciclo Auth, Henrique escolhe próximo ciclo grande:**
+- Endpoints Customer (cadastro, endereço, preferências)
+- Endpoints Order (criar, listar, acompanhar status) — requer Customer
+- Débitos técnicos pré-piloto (expansão Store, organização cardápio, toggle variation) — HIGH priority antes do piloto Tarumirim
 
 ---
 
