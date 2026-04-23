@@ -25,10 +25,12 @@ from app.models import (  # noqa: F401
     order_item,
     order_item_addon,
     order_status_log,
+    otp_code,
     product,
     product_addon_group,
     product_variation,
     store,
+    user,
 )
 
 config = context.config

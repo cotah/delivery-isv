@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_db_session
 from app.db.session import get_engine
 from app.main import app
+from tests.utils.phone import generate_valid_phone_e164
 from tests.utils.tax_id import generate_valid_cnpj
 
 
@@ -263,5 +264,48 @@ def store_factory(
         db_session.add(store)
         db_session.flush()
         return store
+
+    return _create
+
+
+@pytest.fixture
+def user_factory(db_session: Session) -> Any:
+    """Cria um User pra testes. Phone E.164 válido gerado por sorteio."""
+    from app.models.user import User
+
+    def _create(**overrides: Any) -> User:
+        defaults: dict[str, Any] = {
+            "id": uuid.uuid4(),
+            "phone": generate_valid_phone_e164(),
+        }
+        defaults.update(overrides)
+        user = User(**defaults)
+        db_session.add(user)
+        db_session.flush()
+        return user
+
+    return _create
+
+
+@pytest.fixture
+def otp_code_factory(db_session: Session) -> Any:
+    """Cria um OtpCode pra testes. expires_at default now + 10 min (ADR-025)."""
+    from datetime import UTC, datetime, timedelta
+
+    from app.models.otp_code import OtpCode
+
+    def _create(**overrides: Any) -> OtpCode:
+        defaults: dict[str, Any] = {
+            "id": uuid.uuid4(),
+            "phone": generate_valid_phone_e164(),
+            "code_hash": "0" * 64,
+            "expires_at": datetime.now(UTC) + timedelta(minutes=10),
+            "attempts": 0,
+        }
+        defaults.update(overrides)
+        otp = OtpCode(**defaults)
+        db_session.add(otp)
+        db_session.flush()
+        return otp
 
     return _create

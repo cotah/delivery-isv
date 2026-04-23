@@ -18,10 +18,12 @@ from app.models.order import Order
 from app.models.order_item import OrderItem
 from app.models.order_item_addon import OrderItemAddon
 from app.models.order_status_log import OrderStatusLog
+from app.models.otp_code import OtpCode
 from app.models.product import Product
 from app.models.product_addon_group import ProductAddonGroup
 from app.models.product_variation import ProductVariation
 from app.models.store import Store
+from app.models.user import User
 
 __all__ = [
     "Addon",
@@ -34,8 +36,10 @@ __all__ = [
     "OrderItem",
     "OrderItemAddon",
     "OrderStatusLog",
+    "OtpCode",
     "Product",
     "ProductAddonGroup",
     "ProductVariation",
     "Store",
+    "User",
 ]
