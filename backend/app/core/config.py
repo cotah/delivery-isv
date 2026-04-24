@@ -27,6 +27,9 @@ class Settings(BaseSettings):
 
     SMS_PROVIDER: str = "mock"
 
+    JWT_SECRET_KEY: SecretStr
+    JWT_EXPIRATION_MINUTES: int = 60
+
 
 @lru_cache
 def get_settings() -> Settings:
