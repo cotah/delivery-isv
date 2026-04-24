@@ -29,6 +29,7 @@ class ErrorCode(StrEnum):
     VALIDATION_FAILED = "validation_failed"
     NOT_FOUND = "not_found"
     STORE_NOT_FOUND = "store_not_found"
+    SMS_PROVIDER_ERROR = "sms_provider_error"
     INTERNAL_ERROR = "internal_error"
 
 

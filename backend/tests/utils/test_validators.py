@@ -3,6 +3,7 @@ import pytest
 from app.utils.validators import (
     mask_cnpj_for_log,
     mask_cpf_for_log,
+    mask_phone_for_display,
     mask_phone_for_log,
     mask_tax_id_for_log,
     validate_cnpj,
@@ -234,3 +235,34 @@ class TestMaskTaxIdForLog:
 
     def test_returns_none_placeholder_for_none(self) -> None:
         assert mask_tax_id_for_log(None) == "<none>"
+
+
+class TestMaskPhoneForDisplay:
+    def test_masks_br_13_chars(self) -> None:
+        assert mask_phone_for_display("+5531999887766") == "+55 31 9*****7766"
+
+    def test_preserves_ddd_sample(self) -> None:
+        assert mask_phone_for_display("+5511988776655").startswith("+55 11 9")
+        assert mask_phone_for_display("+5521988776655").startswith("+55 21 9")
+        assert mask_phone_for_display("+5585988776655").startswith("+55 85 9")
+
+    def test_preserves_last_4_digits(self) -> None:
+        assert mask_phone_for_display("+5531999887766").endswith("7766")
+        assert mask_phone_for_display("+5531999881234").endswith("1234")
+
+    def test_raises_for_too_short(self) -> None:
+        with pytest.raises(ValueError, match="Invalid phone for display mask"):
+            mask_phone_for_display("+5531")
+
+    def test_raises_for_empty_string(self) -> None:
+        with pytest.raises(ValueError, match="Invalid phone for display mask"):
+            mask_phone_for_display("")
+
+    def test_not_affected_by_mask_phone_for_log(self) -> None:
+        phone = "+5531999887766"
+        display_masked = mask_phone_for_display(phone)
+        log_masked = mask_phone_for_log(phone)
+
+        assert display_masked == "+55 31 9*****7766"
+        assert log_masked == "+55*********66"
+        assert display_masked != log_masked

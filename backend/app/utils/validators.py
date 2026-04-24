@@ -77,6 +77,41 @@ def mask_phone_for_log(phone: str | None) -> str:
     return f"{phone[:3]}{'*' * (len(phone) - 5)}{phone[-2:]}"
 
 
+def mask_phone_for_display(phone: str) -> str:
+    """Mascara telefone E.164 preservando DDD + 4 últimos dígitos (UX).
+
+    Formato: "+55 DD X*****ABCD"
+    Exemplo: "+5531999887766" -> "+55 31 9*****7766"
+
+    Usado em respostas de API onde cliente precisa reconhecer o número
+    (confirmação de envio de OTP, dashboard de perfil). Menos privativo
+    que mask_phone_for_log (que esconde DDD).
+
+    Pressupõe phone já validado E.164 (usar validate_phone_e164 antes).
+
+    Args:
+        phone: telefone E.164 já validado, 13 chars (formato BR: "+55DDNNNNNNNNN")
+
+    Returns:
+        String mascarada legível para UX.
+
+    Raises:
+        ValueError: se phone for menor que 13 chars (formato inválido BR).
+    """
+    if not phone or len(phone) < 13:
+        raise ValueError(f"Invalid phone for display mask: {phone!r}")
+
+    country = phone[:3]
+    ddd = phone[3:5]
+    first = phone[5]
+    last_four = phone[-4:]
+    # Mascara o miolo do subscriber — entre first (pos 5) e last_four (pos -4).
+    # BR celular moderno (14 chars, subscriber 9 dígitos) → 5 asteriscos.
+    masked_middle = "*" * (len(phone) - 9)
+
+    return f"{country} {ddd} {first}{masked_middle}{last_four}"
+
+
 def validate_cnpj(cnpj: str) -> str:
     """Valida CNPJ brasileiro.
 

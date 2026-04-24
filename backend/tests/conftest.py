@@ -16,9 +16,10 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_db_session
+from app.api.deps import get_db_session, get_sms_provider
 from app.db.session import get_engine
 from app.main import app
+from app.services.sms.mock import MockSMSProvider
 from tests.utils.phone import generate_valid_phone_e164
 from tests.utils.tax_id import generate_valid_cnpj
 
@@ -44,17 +45,34 @@ def db_session() -> Generator[Session, None, None]:
 
 
 @pytest.fixture
-def client(db_session: Session) -> Generator[TestClient, None, None]:
-    """TestClient com override de get_db_session pra usar db_session fixture.
+def mock_sms_provider() -> MockSMSProvider:
+    """MockSMSProvider pronto pra testes (APP_ENV=local, aceita valid phones).
 
-    Garante que o endpoint usa a mesma session que o teste,
-    com rollback automático.
+    Endpoint de auth injeta via Depends(get_sms_provider) — fixture `client`
+    aplica override com essa instância. Testes que precisam variantes
+    (ex: simular SMSSendError) podem usar MAGIC_FAILURE_PHONE direto no
+    payload (pattern ADR-025) sem trocar o provider.
+    """
+    return MockSMSProvider(app_env="local")
+
+
+@pytest.fixture
+def client(
+    db_session: Session,
+    mock_sms_provider: MockSMSProvider,
+) -> Generator[TestClient, None, None]:
+    """TestClient com override de get_db_session e get_sms_provider.
+
+    Garante que o endpoint usa a mesma session que o teste (rollback
+    automático) e provider mockado. app.dependency_overrides.clear()
+    no teardown cobre ambos os overrides.
     """
 
     def _override_get_db_session() -> Generator[Session, None, None]:
         yield db_session
 
     app.dependency_overrides[get_db_session] = _override_get_db_session
+    app.dependency_overrides[get_sms_provider] = lambda: mock_sms_provider
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()
