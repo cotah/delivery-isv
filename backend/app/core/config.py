@@ -25,6 +25,8 @@ class Settings(BaseSettings):
     DATABASE_URL: str
     REDIS_URL: str
 
+    SMS_PROVIDER: str = "mock"
+
 
 @lru_cache
 def get_settings() -> Settings:
