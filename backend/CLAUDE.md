@@ -4,7 +4,7 @@
 
 ---
 
-## 1. Estado atual (2026-04-25)
+## 1. Estado atual (2026-04-26)
 
 ### Schema de domínio
 **17 tabelas no Postgres:**
@@ -350,34 +350,37 @@ docker exec delivery-postgres-1 psql -U isv -d isv_delivery -c "SELECT ..."
 
 ## 6. Próximo passo sugerido
 
-**Status:** Ciclo Auth COMPLETO. Fluxo end-to-end de autenticação operacional. Decisão estratégica tomada em 2026-04-25: próximo ciclo grande é Customer endpoints.
+**Status:** Ciclo Auth COMPLETO. Decisão estratégica revisada em 2026-04-26 (pós-descanso): próximo ciclo é Débitos HIGH (zerar débito antes de features novas).
 
-**Próximo ciclo grande: Customer endpoints**
+**Nova ordem dos ciclos (revisada em 2026-04-26):**
 
-Razão da escolha:
-- Continuação natural do Auth (User já existe, Customer associa-se a User)
-- Pattern JWT do CP4 (Depends(get_current_user)) reusável direto em todas as rotas protegidas de Customer
-- Desbloqueia Ciclo Order (que tem FK pra Customer)
-- Risco baixo: pattern conhecido (CRUD + auth protegido)
+1. **Débitos HIGH pré-piloto** (próximo)
+2. Customer endpoints (depois dos HIGH)
+3. Order endpoints (requer Customer, depois)
 
-Escopo provável:
-- Customer model (verificar se já existe parcial — `customer_anonymization.py` em services indica algum trabalho prévio)
-- Schema CustomerRead, CustomerCreate, CustomerUpdate
-- Endpoints: GET /api/v1/customers/me, POST /api/v1/customers, PATCH /api/v1/customers/me
-- Customer-Address relationship (cadastro de endereços para entrega)
-- Integração com User: User.customer relationship 1:1 (User criado lazy via Auth, Customer criado opt-in via cadastro)
+Decisão anterior (2026-04-25, commit 34c8513) era Customer como próximo. Após descanso, Henrique revisou: zerar débito é prioridade antes de features novas. Pattern profissional pra evitar que débito vire crise no piloto Tarumirim.
 
-Estimativa: 3-4 sub-checkpoints, 6-10h de trabalho total.
+**Próximo passo: Débitos HIGH pré-piloto**
 
-**Após Ciclo Customer:**
+3 débitos HIGH registrados no roadmap, todos pré-piloto:
 
-Opção 1 — Ciclo Order (core do produto, ~15-25h)
-Opção 2 — Débitos HIGH pré-piloto (Store expansion + menu organization + variation toggle, ~8-12h, destrava Tarumirim)
+1. **Expansão Store** — adicionar campos: description, phone, opening_hours, minimum_order, cover_image, logo. Crítico pra apresentar app pra cliente real (loja sem horário nem foto não funciona).
 
-Decisão Order vs Débitos HIGH fica para o final do Ciclo Customer — depende de quão perto da realidade do piloto o produto estiver então.
+2. **Organização do cardápio** — display_order em Product/Category, menu_section, featured. Cardápio em ordem aleatória não é aceitável pra UX de delivery.
 
-**Importante:**
-Antes do piloto Tarumirim virar realidade, os 3 débitos HIGH do roadmap precisam estar resolvidos. Customer + Order sem Store expansion é app sem horário de funcionamento, sem foto, sem cardápio organizado. Roadmap mantém tracking.
+3. **Toggle ProductVariation individual** — status column + enum. Permitir desativar variação específica sem mexer no produto inteiro (ex: "carne extra" temporariamente fora de estoque).
+
+Estimativa total: 3-5 dias com ritmo intenso. Cada débito é CRUD focado em modelo existente — patterns de schema, repository, service, endpoint todos já estabelecidos.
+
+**Mobile React Native:**
+
+Será iniciado APÓS os 3 débitos HIGH terminarem. Henrique vai abrir segundo agente dedicado ao frontend nesse momento. Backend até lá cobre todas as telas iniciais necessárias (catálogo + login + perfil + cardápio organizado).
+
+**Após Débitos HIGH:**
+
+- Ciclo Customer (cadastro + endereço + perfil) — 6-10h, 3-4 sub-checkpoints
+- Ciclo Order (core do produto, requer Customer) — 15-25h
+- Integração Pagar.me + Zenvia (depende CNPJ)
 
 ---
 
