@@ -27,7 +27,7 @@
 - `alembic_version` — 1 row (controle do Alembic)
 
 ### Migrations
-**17 aplicadas** em sequência:
+**19 aplicadas** em sequência:
 1. `57aa2a205690` — create cities table
 2. `ffd2034a50bd` — seed mg cities
 3. `6ebc0349ab8c` — create customers table
@@ -45,9 +45,11 @@
 15. `e16e2e9ee921` — create order_status_logs table
 16. `2e0d02f42dab` — create users and otp_codes tables
 17. `661195884f97` — add status to product_variations (HIGH debt #3)
+18. `90b06a960788` — add display_order/menu_section/featured to products + display_order to categories (HIGH debt #2)
+19. `d9a8d7e19f52` — rename product_variations status constraint (LOW debt fix — remove duplicate prefix from CP1 HIGH)
 
 ### Qualidade
-- **492 testes** passando em ~2.4s
+- **511 testes** passando em ~2.8s
 - **mypy strict** limpo em **110 source files**
 - **ruff check** + **ruff format** limpos
 - Zero `# noqa`, zero `# type: ignore` novos (2 narrow ignores legítimos pré-existentes em test_base.py CP2 com justificativa documentada)
@@ -116,7 +118,7 @@ Cliente real consegue: POST /auth/request-otp → recebe SMS → POST /auth/veri
 2. Rate limit phone-based (CP3c) — slowapi async key_func limitation, antes de scale
 3. Fail-open runtime Redis (CP3c) — middleware custom, antes de staging Railway
 
-**Ciclo Débitos HIGH pré-piloto — EM ANDAMENTO (1/3 checkpoints):**
+**Ciclo Débitos HIGH pré-piloto — EM ANDAMENTO (2/3 checkpoints):**
 
 Decisão estratégica revisada em 2026-04-26 (pós-descanso): zerar débitos HIGH antes de Customer/Order. Pattern profissional pra evitar que débito vire crise no piloto Tarumirim.
 
@@ -140,13 +142,30 @@ Decisões deste CP1:
 - Migration aditiva com `server_default` cobre rows pré-existentes sem backfill manual
 - Manual edit de migration pra adicionar `op.create_check_constraint(...)` quando autogenerate não detecta CheckConstraint em ADD COLUMN (limitação alembic)
 
-**Débitos HIGH restantes (2/3, ordem a decidir):**
-1. Expansão do modelo Store — campos description/phone/cover/logo/minimum_order/preparation_minutes + tabela store_hours
-2. Organização e ordenação do cardápio — display_order, menu_section, featured
+Checkpoint 2 (commit 16e664d) — Menu organization. Resolve débito HIGH #2.
+- Product ganha 3 campos: `display_order` (Integer), `menu_section` (StrEnum `MenuSection` 9 valores incluindo PIZZA e SNACK pra contexto BR — pizzaria + lanchonete em Tarumirim piloto), `featured` (Boolean).
+- Category ganha `display_order` (Integer).
+- Migration `90b06a960788` aditiva, com `op.create_check_constraint('menu_section', 'products', ...)` manual (autogenerate não detecta CHECK em ADD COLUMN — pattern já visto no CP1).
+- ROW_NUMBER OVER (ORDER BY created_at) popula display_order: global em categories (3 rows seed → 1/2/3), PARTITION BY store_id em products (cada loja independente; 0 rows reais = no-op limpo).
+- Repository `list_store_products` ordena por (`featured DESC, display_order ASC, name ASC`) — composição com ordenação alfabética existente em vez de substituição.
+- 19 testes novos. 492 → 511.
+
+**Débito LOW resolvido na sessão 2026-04-26 (commit b9e79c7):**
+
+CheckConstraint do CP1 HIGH (3159442) tinha nome com prefixo duplicado no banco: `ck_product_variations_ck_product_variations_status`. Causa: passou nome já-prefixado para `op.create_check_constraint()`; naming_convention adicionou prefixo de novo. Descoberto durante CP2 HIGH (Claude Code identificou pattern correto: passar só sufixo). Fix: migration `d9a8d7e19f52` dedicada, drop nome bugado + create nome limpo. Roundtrip 3x validado. Padrão profissional: bug descoberto → bug resolvido na mesma sessão. ~30min do diagnóstico ao commit.
+
+**Patterns reusáveis emergidos no CP2 HIGH + fix LOW:**
+- Pattern correto de CheckConstraint com `naming_convention`: passar SÓ o sufixo em `op.create_check_constraint()` E em `op.drop_constraint()`. naming_convention sempre prefixa com `ck_<table>_` automaticamente. Passar nome já-prefixado causa duplicação.
+- alembic `--sql` preview obrigatório antes de aplicar migration de rename de constraint (naming_convention re-prefixa nomes passados a `drop_constraint`, podendo gerar nomes truncados + hash sufixos imprevisíveis).
+- ROW_NUMBER OVER + PARTITION BY pattern pra popular `display_order` em rows pré-existentes — funciona com tabelas vazias (no-op limpo) e populadas (atribui sequência por grupo).
+- Repository com ordenação composta (`featured DESC, display_order ASC, name ASC`) — combina sinal de destaque + ordem manual + fallback alfabético, pattern aplicável a qualquer listagem ordenável.
+
+**Débitos HIGH restantes (1/3):**
+1. Expansão do modelo Store — campos description/phone/cover/logo/minimum_order/preparation_minutes + opening_hours (decisão arquitetural pendente: JSON simples vs tabela `store_hours`).
 
 ### Arquitetura documentada
 - **25 ADRs** em `C:\Users\henri\Documents\My second mind\Projetos\ISV Delivery\11 - Decisões Técnicas (log).md`
-- 7 StrEnums em `app/domain/enums.py`: `Environment`, `AddressType`, `TaxIdType`, `StoreStatus`, `ProductStatus`, `AddonGroupType`, `OrderStatus`
+- 9 StrEnums em `app/domain/enums.py`: `Environment`, `AddressType`, `TaxIdType`, `StoreStatus`, `ProductStatus`, `ProductVariationStatus`, `AddonGroupType`, `MenuSection`, `OrderStatus`
 
 ---
 
@@ -379,35 +398,40 @@ docker exec delivery-postgres-1 psql -U isv -d isv_delivery -c "SELECT ..."
 
 ## 6. Próximo passo sugerido
 
-**Status:** Ciclo Débitos HIGH em andamento (1/3 checkpoints). CP1 fechou débito #3 (Toggle ProductVariation individual) no commit 3159442.
+**Status:** Ciclo Débitos HIGH em construção. **2/3 débitos resolvidos**. 1 débito LOW resolvido em paralelo. Falta apenas Débito #1 (Store expansion).
 
 **Ordem dos ciclos (revisada em 2026-04-26):**
 
-1. **Débitos HIGH pré-piloto** ← em andamento, 1/3 done
+1. **Débitos HIGH pré-piloto** ← em andamento, 2/3 done
 2. Customer endpoints (depois dos HIGH)
 3. Order endpoints (requer Customer, depois)
 
 **Débitos HIGH — status atual:**
 
 - [x] **#3 Toggle ProductVariation individual** — RESOLVIDO no commit 3159442 (CP1 do ciclo HIGH). StrEnum ACTIVE/INACTIVE + status column + filtro no service combinando contratos com herança CP3.
-- [ ] **#1 Expansão Store** — pendente. Campos description, phone, opening_hours (tabela separada), minimum_order_cents, cover_image_url, logo_url, average_preparation_minutes.
-- [ ] **#2 Organização do cardápio** — pendente. display_order em Product, menu_section (ADR novo: tabela vs enum), featured. Atualizar repository pra ordenação composta.
+- [x] **#2 Organização do cardápio** — RESOLVIDO no commit 16e664d (CP2 do ciclo HIGH). `display_order` em Product/Category + `menu_section` (StrEnum `MenuSection` com 9 valores) + `featured` (Boolean). Repository com ordenação composta. ROW_NUMBER popula rows pré-existentes via PARTITION BY store_id (products) e global (categories).
+- [ ] **#1 Expansão Store** — pendente. **Último HIGH pré-piloto.**
 
-**Decisão pendente: qual débito HIGH atacar a seguir?**
+**Débito LOW resolvido em paralelo:** commit b9e79c7 — rename de `ck_product_variations_status` removendo prefix duplicado herdado do CP1 HIGH. Cosmético, descoberto durante CP2 HIGH, resolvido na mesma sessão (~30min).
 
-Critérios pra escolha (a ser feita pelo Henrique no próximo prompt):
+**Próximo passo: Débito #1 (Expansão Store) — ÚLTIMO débito HIGH pré-piloto**
 
-| Aspecto | #1 Expansão Store | #2 Organização cardápio |
-|---|---|---|
-| Cirurgia | Aditivo simples + tabela nova (store_hours) | Aditivo simples + ADR novo (tabela vs enum) |
-| Bloqueio | Bloqueia tela de detalhe da loja no mobile | Bloqueia UX do cardápio (ordem aleatória inaceitável) |
-| Complexidade | Média (7 campos + 1 tabela 7-rows) | Média (3 campos + decisão de modelagem menu_section) |
-| Riscos | URL validation pra imagens, E.164 reuso | Migração de ordenação no repository (impacto em testes do CP3) |
-| ADR novo | Possivelmente pra horários (tabela vs JSON) | Sim, dedicado a organização |
+Campos a adicionar em Store:
+- `description` (Text)
+- `phone` (E.164, similar a Customer — ADR-009)
+- `opening_hours` (decisão arquitetural pendente: JSON simples vs tabela `store_hours` dedicada)
+- `minimum_order_cents` (Integer)
+- `cover_image_url` (URL)
+- `logo_url` (URL)
+- `average_preparation_minutes` (Integer)
 
-Recomendação informal: começar pelo #2 (organização do cardápio) porque mexe na mesma camada do CP1 que acabou de fechar (Product/ProductVariation/service de catálogo) — patterns frescos na cabeça, contexto reusado. #1 é mais "lista de campos" e pode esperar.
+**Tamanho:** médio (~1-2 dias ritmo Henrique).
 
-Mas decisão é do Henrique. Próximo prompt deve indicar qual débito + escopo do CP1 dele.
+**Decisão pendente principal:** `opening_hours` como JSON simples (1 coluna em Store) ou tabela `StoreOpeningHours` dedicada (7 rows típicas, permite "fechado domingos"). Implicações pós-piloto (queries de "loja aberta agora" mais simples com tabela; menos joins com JSON).
+
+**Risco:** baixo. Extensão pura de Store, zero migração de dados (server_default cobre rows existentes).
+
+Após fechar Débito #1, ciclo HIGH 100% completo. Então Customer cycle.
 
 **Mobile React Native:**
 
