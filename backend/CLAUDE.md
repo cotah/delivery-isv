@@ -46,20 +46,21 @@
 16. `2e0d02f42dab` — create users and otp_codes tables
 
 ### Qualidade
-- **457 testes** passando em ~2.3s
-- **mypy strict** limpo em **107 source files**
+- **481 testes** passando em ~2.3s
+- **mypy strict** limpo em **110 source files**
 - **ruff check** + **ruff format** limpos
-- Zero `# noqa`, zero `# type: ignore`, zero warnings
+- Zero `# noqa`, zero `# type: ignore` novos (2 narrow ignores legítimos pré-existentes em test_base.py CP2 com justificativa documentada)
 
-### API REST — catálogo público completo + Auth em construção
+### API REST — catálogo público + Auth completos
 - **Versionamento:** `/api/v1/` (ADR-021)
 - **Estrutura em 4 camadas:** schemas → api/v1 → services → repositories → models (ADR-020)
-- **Endpoints implementados:** 5 (3 catálogo público + 2 auth)
+- **Endpoints implementados:** 6 (3 catálogo público + 2 auth + 1 protegido)
   - `GET /api/v1/stores` — lista lojas aprovadas com category/city aninhados, paginação offset/limit
   - `GET /api/v1/stores/{store_id}` — detalhe com endereço completo, 404 `store_not_found` específico, 404 opaco pra soft-deleted (ADR-022)
   - `GET /api/v1/stores/{store_id}/products` — cardápio aninhado 3 níveis (produto → variações + grupos de adicionais → adicionais), is_available calculado, ordenação alfabética placeholder, limit query param default 500 max 1000 (ADR-024 variante sem paginação tradicional)
   - `POST /api/v1/auth/request-otp` — valida E.164 via field_validator, invalida OTPs anteriores, gera código 6 dígitos + sha256 hash, persiste OtpCode, commit, chama SMSProvider. Rate limit IP via slowapi+Redis (10/h). 422/429/502 (ADR-025).
   - `POST /api/v1/auth/verify-otp` — valida hash com hmac.compare_digest (constant-time), incrementa attempts ANTES da validação (anti brute force), marca consumed, cria User lazy se não existir, retorna JWT. Anti-enumeração: 5 cenários de erro (not_found, hash errado, expired, consumed, attempts esgotados) → 1 response 400 `invalid_otp_code` com mesma mensagem. Rate limit IP via slowapi+Redis (30/h). 400/422/429 (ADR-025).
+  - `GET /api/v1/users/me` — primeiro endpoint protegido. Requer Bearer JWT no header Authorization. Retorna UserRead. 401 com WWW-Authenticate header (RFC 6750) em 4 cenários: unauthenticated, token_expired, invalid_token (malformed), invalid_token (user not in DB). Diferenciação UX (ADR-025).
 - **Padrões estabelecidos:**
   - Formato de erro uniforme `{"error": {"code", "message", "details"}}` (ADR-022)
   - Envelope de paginação `{"items", "total", "offset", "limit"}` (ADR-023)
@@ -71,51 +72,48 @@
   - Aninhamento 3 níveis com `selectinload` em cadeia — queries O(N) fixas independente do tamanho do cardápio
   - Filtros de soft-delete no service (Python, não SQL) quando eager load traz tudo — simples e flexível
 
-**Ciclo Auth (ADR-025) em construção. 3/4 checkpoints concluídos. CP3 em 3/3 sub-checkpoints (CP3 completo):**
+**Ciclo Auth (ADR-025) — COMPLETO (4/4 checkpoints):**
 
 Checkpoint 1 (commit a8524c7) — Modelos User + OtpCode + migration 2e0d02f42dab.
 
 Checkpoint 2 (commit ccd0c33) — Infraestrutura SMS. Protocol SMSProvider + MockSMSProvider + fail-fast em produção + MAGIC_FAILURE_PHONE.
 
-Checkpoint 3a (commit 92d06ec) — JWT utils. `create_access_token` + `decode_access_token` + hierarquia de exceções (InvalidTokenError base + ExpiredTokenError + MalformedTokenError) + AccessTokenPayload frozen dataclass + HS256 com secret 86 chars.
+Checkpoint 3a (commit 92d06ec) — JWT utils (HS256, secret 86 chars, hierarquia ExpiredTokenError/MalformedTokenError/InvalidTokenError, AccessTokenPayload frozen).
 
-Checkpoint 3b (commit 7d71f39) — `POST /api/v1/auth/request-otp`. Schemas com field_validator canônico. Repository otp.py com invalidate_active_otps + create_otp_code + mark_otp_consumed. Service com pattern "commit antes de HTTP externo". `mask_phone_for_display` em validators.py.
+Checkpoint 3b (commit 7d71f39) — POST /api/v1/auth/request-otp. Pattern commit-antes-de-HTTP estabelecido.
 
-Checkpoint 3c (commit 9602808) — `POST /api/v1/auth/verify-otp` + rate limit em ambos endpoints via slowapi+Redis. Repository estendido com `find_active_otp_for_phone_for_update` (SELECT FOR UPDATE) + `increment_otp_attempts`. Novo repository user.py com `find_or_create_user` (try/except IntegrityError + retry). Service `verify_otp` orquestra SELECT FOR UPDATE + increment attempts ANTES do hash + `hmac.compare_digest` + lazy user creation + JWT. `INVALID_OTP_MESSAGE` constante força anti-enumeração (5 cenários → mesma string). Rate limit IP-only (phone-based como débito MEDIUM). Fail-open inicialização Redis. Custom handler 429 formato ErrorResponse.
+Checkpoint 3c (commit 9602808) — POST /api/v1/auth/verify-otp + rate limit slowapi+Redis IP-only. Anti-enumeração por construção via INVALID_OTP_MESSAGE constante. SELECT FOR UPDATE em OtpCode. hmac.compare_digest. find_or_create_user com retry IntegrityError.
 
-Falta no Ciclo Auth:
-- Checkpoint 4: middleware JWT (get_current_user dependency) + GET /users/me
+Checkpoint 4 (commit 9b7ac20) — Middleware JWT (get_current_user dependency com HTTPBearer + auto_error=False). GET /api/v1/users/me protegido. Diferenciação token_expired vs invalid_token na response (UX bom + log de segurança só em malformed). RFC 6750 compliance via WWW-Authenticate header. Catch arquitetural: _build_response em errors.py preservando exc.headers (sem isso, header WWW-Authenticate silenciosamente descartado).
 
-Padrões estabelecidos no Checkpoint 1 Auth:
-- `generate_valid_phone_e164()` em tests/utils/phone.py — helper pra factories que precisam de phone E.164 único (análogo ao tax_id.py existente)
-- Pattern `@validates("phone")` com `_key: str` (underscore prefix) — ruff ARG001 compliance
-- DateTime(timezone=True) como padrão em novos models (consistência com TimestampMixin)
+**Fluxo end-to-end operacional:**
+Cliente real consegue: POST /auth/request-otp → recebe SMS → POST /auth/verify-otp → recebe JWT → usa Bearer token em rotas protegidas (exemplo: GET /users/me).
 
-Padrões estabelecidos no Checkpoint 2 Auth:
-- app/services/sms/ como pasta (exceção ao pattern arquivo único — justificado por N providers futuros)
-- @dataclass(frozen=True) para DTO interno não-HTTP (SendResult)
-- Protocol + lru_cache como padrão de dependency injection de provider
-- MAGIC_FAILURE_PHONE em base.py (constante centralizada para DRY)
-- Logging padrão (logging.getLogger) — structlog vira débito para ciclo de observability
-- Fail-fast em __init__ quando config inválida (APP_ENV=production em mock)
+**Defense-in-depth em 6 camadas:**
+1. Rate limit IP (slowapi+Redis): request-otp 10/h, verify-otp 30/h
+2. Attempts no OtpCode (3 max, brute force defense)
+3. MAGIC_FAILURE_PHONE fail-fast (DDD impossível)
+4. hmac.compare_digest no hash (timing attack defense)
+5. sha256 no código (DB leak defense)
+6. Anti-enumeração (1 mensagem 5 cenários em verify-otp; differentiation only between expired vs invalid in JWT)
 
-Padrões estabelecidos entre CP3a e CP3b:
-- Hierarquia de exceções 3 níveis (InvalidTokenError base + subclasses) — granularidade sem overhead, permite middleware distinguir cenários
-- Secret JWT gerado via script sem stdout para evitar scrollback leak
-- Pattern "commit antes de HTTP externo" em services que chamam provider externo — evita pool exhaustion
-- @field_validator + função canônica em schemas (primeiro uso em RequestOtpRequest)
-- mask_phone_for_display vs mask_phone_for_log (separação por contexto: UX vs telemetria)
-- `cast("CursorResult[Any]", session.execute(...))` com comentário inline pra limitações do mypy plugin SQLAlchemy em UPDATE/DELETE — zero `# type: ignore`
+**Patterns reusáveis estabelecidos no Ciclo Auth (pra futuros ciclos):**
+- @dataclass(frozen=True) para DTOs internos (SendResult, AccessTokenPayload)
+- Hierarquia de exceções (base + subclasses) para granularidade sem overhead
+- Pattern "commit antes de HTTP externo" em services com provider externo
+- Pattern PASSO 0 inspeção obrigatória — 41 divergências pegas em 7 checkpoints
+- Constantes module-level forçando consistência (INVALID_OTP_MESSAGE)
+- Singleton + lru_cache para providers e config
+- HTTPBearer(auto_error=False) + 401 manual com formato ErrorResponse
+- mask_phone_for_log vs mask_phone_for_display (separação por contexto)
+- get_or_create com retry IntegrityError (race condition handling)
+- SELECT FOR UPDATE pra serializar operações concorrentes
+- Cast explícito vs # type: ignore (cast para produção, narrow ignore aceitável em testes que verificam erros que mypy detecta estaticamente)
 
-Padrões estabelecidos no CP3c:
-- SELECT FOR UPDATE em `with_for_update()` pra serializar operações concorrentes em linha específica (defesa contra race condition em counter + state)
-- Incremento de counter ANTES de validação (brute force defense — wrong codes count toward limit)
-- `hmac.compare_digest` pra comparações de segurança (constant-time, anti timing attack)
-- Constantes exportadas de módulo (INVALID_OTP_MESSAGE) quando múltiplas raises precisam da mesma string (anti-drift por construção; teste valida uso uniforme)
-- Rate limit via slowapi + Redis com fail-open inicialização (try/except em `_build_limiter` + fallback in-memory)
-- Anti-enumeração por construção (1 mensagem, 5 cenários — pattern iFood/Rappi/Twilio/Auth0)
-- Singleton pattern para Limiter (slowapi `app.state.limiter`)
-- Custom exception handlers para formato ErrorResponse padrão (429 com `Retry-After` header + `retry_after_seconds` no body — defense in depth)
+**Débitos abertos do Ciclo Auth (3 MEDIUM, registrados no roadmap):**
+1. Estratégia de secrets no Claude Code (CP3a) — antes de staging ou multi-dev
+2. Rate limit phone-based (CP3c) — slowapi async key_func limitation, antes de scale
+3. Fail-open runtime Redis (CP3c) — middleware custom, antes de staging Railway
 
 ### Arquitetura documentada
 - **25 ADRs** em `C:\Users\henri\Documents\My second mind\Projetos\ISV Delivery\11 - Decisões Técnicas (log).md`
@@ -352,28 +350,34 @@ docker exec delivery-postgres-1 psql -U isv -d isv_delivery -c "SELECT ..."
 
 ## 6. Próximo passo sugerido
 
-**Status:** Ciclo Auth na reta final. 3/4 checkpoints concluídos, fluxo HTTP completo (cliente consegue login hoje — request-otp → verify-otp → JWT). Falta só middleware pra proteger rotas.
+**Status:** Ciclo Auth COMPLETO. Fluxo end-to-end de autenticação operacional. Decisão estratégica tomada em 2026-04-25: próximo ciclo grande é Customer endpoints.
 
-**Próximo passo imediato: Checkpoint 4 (último do ciclo Auth)**
+**Próximo ciclo grande: Customer endpoints**
 
-Middleware JWT + GET /api/v1/users/me protegida.
+Razão da escolha:
+- Continuação natural do Auth (User já existe, Customer associa-se a User)
+- Pattern JWT do CP4 (Depends(get_current_user)) reusável direto em todas as rotas protegidas de Customer
+- Desbloqueia Ciclo Order (que tem FK pra Customer)
+- Risco baixo: pattern conhecido (CRUD + auth protegido)
 
-Escopo do CP4:
-- Dependency `get_current_user` em `app/api/deps.py`
-- Decodifica token JWT do header Authorization (Bearer)
-- Trata `ExpiredTokenError` → 401 mensagem amigável "sessão expirada"
-- Trata `MalformedTokenError` → 401 genérico + log WARNING (security event)
-- Trata token ausente → 401
-- GET /api/v1/users/me retorna dados do User autenticado
-- Schema `UserRead` em `app/schemas/user.py` (novo)
-- Rota protegida via `Depends(get_current_user)`
-- Testes: happy path + 3 cenários de 401 + schema response
-- Estimativa: 1h
+Escopo provável:
+- Customer model (verificar se já existe parcial — `customer_anonymization.py` em services indica algum trabalho prévio)
+- Schema CustomerRead, CustomerCreate, CustomerUpdate
+- Endpoints: GET /api/v1/customers/me, POST /api/v1/customers, PATCH /api/v1/customers/me
+- Customer-Address relationship (cadastro de endereços para entrega)
+- Integração com User: User.customer relationship 1:1 (User criado lazy via Auth, Customer criado opt-in via cadastro)
 
-**Após Ciclo Auth completo, Henrique escolhe próximo ciclo:**
-- Customer endpoints (cadastro, endereço, preferências)
-- Order endpoints (requer Customer)
-- Débitos HIGH pré-piloto (expansão Store, organização cardápio, toggle variation)
+Estimativa: 3-4 sub-checkpoints, 6-10h de trabalho total.
+
+**Após Ciclo Customer:**
+
+Opção 1 — Ciclo Order (core do produto, ~15-25h)
+Opção 2 — Débitos HIGH pré-piloto (Store expansion + menu organization + variation toggle, ~8-12h, destrava Tarumirim)
+
+Decisão Order vs Débitos HIGH fica para o final do Ciclo Customer — depende de quão perto da realidade do piloto o produto estiver então.
+
+**Importante:**
+Antes do piloto Tarumirim virar realidade, os 3 débitos HIGH do roadmap precisam estar resolvidos. Customer + Order sem Store expansion é app sem horário de funcionamento, sem foto, sem cardápio organizado. Roadmap mantém tracking.
 
 ---
 
