@@ -100,6 +100,34 @@ class ProductVariationStatus(StrEnum):
     INACTIVE = "inactive"
 
 
+class MenuSection(StrEnum):
+    """Seção do cardápio para organização visual no frontend (HIGH debt #2).
+
+    Valores universais cobrindo principais tipos de delivery brasileiro.
+    Pizzaria (piloto Tarumirim) usa PIZZA. Lanchonete usa SNACK. Marmita
+    usa MAIN_COURSE. OTHER é catch-all pra produtos que não se encaixam
+    em nenhuma seção — também é o default em rows pré-existentes (zero
+    em prod, mas defensivo) via server_default na migration.
+
+    Backend não ordena por menu_section — frontend agrupa o response
+    plano por este campo (D5: endpoint retorna tudo, frontend agrupa).
+
+    Reversível: novos valores via migration DROP CHECK + ADD CHECK +
+    atualizar enum (ADR-006). Pattern de StrEnum + VARCHAR(20) + CHECK
+    dinâmico mesmo de ProductStatus/ProductVariationStatus.
+    """
+
+    APPETIZER = "appetizer"
+    SNACK = "snack"
+    PIZZA = "pizza"
+    MAIN_COURSE = "main_course"
+    SIDE_DISH = "side_dish"
+    BEVERAGE = "beverage"
+    DESSERT = "dessert"
+    COMBO = "combo"
+    OTHER = "other"
+
+
 class OrderStatus(StrEnum):
     """Status do pedido (ADR-017).
 

@@ -46,8 +46,8 @@ class TestGetStoresEndpoint:
         # Campos top-level (sem delivery_fee_cents — não existe em Store)
         assert set(item.keys()) == {"id", "name", "slug", "neighborhood", "category", "city"}
 
-        # Embed de category
-        assert set(item["category"].keys()) == {"id", "name", "slug"}
+        # Embed de category (display_order adicionado em HIGH debt #2, 2026-04-26)
+        assert set(item["category"].keys()) == {"id", "name", "slug", "display_order"}
 
         # Embed de city (com state, já que City.state existe)
         assert set(item["city"].keys()) == {"id", "name", "state"}
@@ -216,7 +216,8 @@ class TestGetStoreDetailEndpoint:
         store = store_factory(status=StoreStatus.APPROVED)
         response = client.get(f"/api/v1/stores/{store.id}")
         body = response.json()
-        assert set(body["category"].keys()) == {"id", "name", "slug"}
+        # display_order adicionado em HIGH debt #2 (2026-04-26)
+        assert set(body["category"].keys()) == {"id", "name", "slug", "display_order"}
         assert "id" in body["city"]
         assert "name" in body["city"]
 

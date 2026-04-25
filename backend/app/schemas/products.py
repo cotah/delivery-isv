@@ -9,6 +9,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.domain.enums import MenuSection
+
 
 class AddonSummary(BaseModel):
     """Addon individual (folha da árvore do cardápio, ADR-020)."""
@@ -67,6 +69,14 @@ class ProductRead(BaseModel):
     status OUT_OF_STOCK -> is_available=False (produto aparece acinzentado).
     status PAUSED -> produto NÃO aparece na resposta (filtrado no repository).
 
+    Organização do cardápio (HIGH debt #2, 2026-04-26):
+    - display_order: posição definida pelo lojista no painel
+    - menu_section: seção pra agrupamento (D5: frontend agrupa, backend retorna plano)
+    - featured: destaque no topo (similar "em promoção" do iFood)
+
+    Backend ordena por (featured DESC, display_order ASC, name ASC). Frontend
+    lê menu_section de cada item e agrupa visualmente.
+
     NÃO expõe:
     - store_id (cliente já conhece pela URL)
     - status cru (frontend usa is_available)
@@ -81,6 +91,9 @@ class ProductRead(BaseModel):
     image_url: str | None = Field(None)
     preparation_minutes: int | None = Field(None, ge=0, examples=[30])
     is_available: bool = Field(..., examples=[True])
+    display_order: int = Field(..., ge=0, examples=[1])
+    menu_section: MenuSection = Field(..., examples=[MenuSection.PIZZA])
+    featured: bool = Field(..., examples=[False])
     variations: list[ProductVariationSummary]
     addon_groups: list[AddonGroupSummary]
 

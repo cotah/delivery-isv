@@ -81,8 +81,11 @@ def get_store(
         "adicionais aninhados. Produtos PAUSED ficam escondidos. Produtos "
         "OUT_OF_STOCK aparecem com is_available=false. Variations INACTIVE "
         "(toggle individual) são filtradas do response — produto com todas "
-        "variations INACTIVE vira is_available=false. Não pagina tradicionalmente "
-        "— query param `limit` (default 500, max 1000) como limite de segurança. "
+        "variations INACTIVE vira is_available=false. Ordenação dos produtos: "
+        "featured DESC, display_order ASC, name ASC (HIGH debt #2). Frontend "
+        "agrupa por menu_section (campo enum no item). Não pagina "
+        "tradicionalmente — query param `limit` (default 500, max 1000) "
+        "como limite de segurança. "
         "Retorna 404 se loja não existe, não está aprovada ou foi removida. "
         "Endpoint público — não exige autenticação."
     ),

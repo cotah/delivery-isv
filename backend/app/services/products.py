@@ -103,6 +103,9 @@ def _build_product_read(product: "Product") -> ProductRead:
         image_url=product.image_url,
         preparation_minutes=product.preparation_minutes,
         is_available=is_product_available,
+        display_order=product.display_order,
+        menu_section=product.menu_section,
+        featured=product.featured,
         variations=variations_summaries,
         addon_groups=addon_groups_summaries,
     )

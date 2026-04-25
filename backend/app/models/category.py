@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, String
+from sqlalchemy import Boolean, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -14,6 +14,10 @@ class Category(Base, TimestampMixin):
 
     Sem soft delete — controle de disponibilidade via is_active.
     Pattern consistente com cities (ADR-008).
+
+    display_order: posição em listagens (admin define ordem visual).
+    Migration popula sequencialmente por created_at em rows existentes.
+    Default 0 em novas rows — admin organiza depois.
     """
 
     __tablename__ = "categories"
@@ -27,6 +31,12 @@ class Category(Base, TimestampMixin):
         default=True,
         server_default="true",
     )
+    display_order: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default="0",
+    )
 
     def __repr__(self) -> str:
-        return f"<Category {self.slug}>"
+        return f"<Category {self.slug} order={self.display_order}>"

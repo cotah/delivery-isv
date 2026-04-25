@@ -267,6 +267,9 @@ class TestListStoreProductsEndpoint:
             "image_url",
             "preparation_minutes",
             "is_available",
+            "display_order",
+            "menu_section",
+            "featured",
             "variations",
             "addon_groups",
         }
@@ -469,3 +472,121 @@ class TestVariationFilteringInMenu:
 
         assert len(variations) == 1
         assert variations[0]["is_available"] is True
+
+
+class TestMenuOrdering:
+    """Organização do cardápio (HIGH debt #2, 2026-04-26).
+
+    Backend ordena por (featured DESC, display_order ASC, name ASC).
+    Frontend lê menu_section de cada item e agrupa por seção (D5: backend
+    retorna plano, frontend agrupa).
+    """
+
+    def test_products_ordered_by_featured_desc_then_display_order_then_name(
+        self,
+        client: TestClient,
+        store_factory: Any,
+        product_factory: Any,
+    ) -> None:
+        from app.domain.enums import MenuSection
+
+        store = store_factory(status=StoreStatus.APPROVED)
+        # featured=True deve vir primeiro mesmo com display_order alto.
+        product_factory(store=store, name="Pizza Z", featured=True, display_order=99)
+        # display_order menor vence entre não-featured.
+        product_factory(store=store, name="Pizza B", display_order=2)
+        product_factory(store=store, name="Pizza A", display_order=1)
+        # mesmo display_order: tiebreaker por name ASC.
+        product_factory(
+            store=store, name="Coca Beta", display_order=3, menu_section=MenuSection.BEVERAGE
+        )
+        product_factory(
+            store=store, name="Coca Alfa", display_order=3, menu_section=MenuSection.BEVERAGE
+        )
+
+        response = client.get(f"/api/v1/stores/{store.id}/products")
+        names = [p["name"] for p in response.json()["items"]]
+
+        assert names == ["Pizza Z", "Pizza A", "Pizza B", "Coca Alfa", "Coca Beta"]
+
+    def test_featured_products_appear_first(
+        self,
+        client: TestClient,
+        store_factory: Any,
+        product_factory: Any,
+    ) -> None:
+        """Regressão isolada: featured=True bate display_order ASC + name ASC."""
+        store = store_factory(status=StoreStatus.APPROVED)
+        product_factory(store=store, name="Aaa Comum", featured=False, display_order=1)
+        product_factory(store=store, name="Zzz Destaque", featured=True, display_order=999)
+
+        response = client.get(f"/api/v1/stores/{store.id}/products")
+        names = [p["name"] for p in response.json()["items"]]
+
+        assert names[0] == "Zzz Destaque"
+
+    def test_menu_section_in_response(
+        self,
+        client: TestClient,
+        store_factory: Any,
+        product_factory: Any,
+    ) -> None:
+        from app.domain.enums import MenuSection
+
+        store = store_factory(status=StoreStatus.APPROVED)
+        product_factory(store=store, name="Pizza", menu_section=MenuSection.PIZZA)
+        product_factory(store=store, name="Suco", menu_section=MenuSection.BEVERAGE)
+
+        response = client.get(f"/api/v1/stores/{store.id}/products")
+        items = response.json()["items"]
+        by_name = {p["name"]: p for p in items}
+
+        assert by_name["Pizza"]["menu_section"] == "pizza"
+        assert by_name["Suco"]["menu_section"] == "beverage"
+
+    def test_display_order_in_response(
+        self,
+        client: TestClient,
+        store_factory: Any,
+        product_factory: Any,
+    ) -> None:
+        store = store_factory(status=StoreStatus.APPROVED)
+        product_factory(store=store, name="X", display_order=7)
+
+        response = client.get(f"/api/v1/stores/{store.id}/products")
+        item = response.json()["items"][0]
+
+        assert item["display_order"] == 7
+
+    def test_featured_in_response(
+        self,
+        client: TestClient,
+        store_factory: Any,
+        product_factory: Any,
+    ) -> None:
+        store = store_factory(status=StoreStatus.APPROVED)
+        product_factory(store=store, name="Em destaque", featured=True)
+        product_factory(store=store, name="Normal", featured=False)
+
+        response = client.get(f"/api/v1/stores/{store.id}/products")
+        by_name = {p["name"]: p for p in response.json()["items"]}
+
+        assert by_name["Em destaque"]["featured"] is True
+        assert by_name["Normal"]["featured"] is False
+
+    def test_default_menu_fields_when_factory_creates_minimal_product(
+        self,
+        client: TestClient,
+        store_factory: Any,
+        product_factory: Any,
+    ) -> None:
+        """Produto criado sem campos novos pega defaults: 0/other/false."""
+        store = store_factory(status=StoreStatus.APPROVED)
+        product_factory(store=store, name="Padrão")
+
+        response = client.get(f"/api/v1/stores/{store.id}/products")
+        item = response.json()["items"][0]
+
+        assert item["display_order"] == 0
+        assert item["menu_section"] == "other"
+        assert item["featured"] is False

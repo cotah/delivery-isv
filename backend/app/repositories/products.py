@@ -27,8 +27,12 @@ def list_store_products(
     - Product.addon_groups via M:N (secondary=product_addon_groups)
     - Product.addon_groups -> AddonGroup.addons (cadeia)
 
-    Ordenação: Product.name ASC. Débito técnico HIGH:
-    display_order/menu_section/featured em ciclo próprio.
+    Ordenação (HIGH debt #2, 2026-04-26): featured DESC, display_order ASC,
+    name ASC. featured=True vem primeiro (Boolean.desc() = TRUE > FALSE).
+    display_order é INT ASC (lojista define no painel admin futuro).
+    name ASC é tiebreaker determinístico quando featured/display_order
+    empatam (rows pré-existentes têm featured=False e display_order=0).
+    Frontend agrupa o response plano por menu_section (D5).
     """
     stmt = (
         select(Product)
@@ -41,7 +45,11 @@ def list_store_products(
             selectinload(Product.variations),
             selectinload(Product.addon_groups).selectinload(AddonGroup.addons),
         )
-        .order_by(Product.name.asc())
+        .order_by(
+            Product.featured.desc(),
+            Product.display_order.asc(),
+            Product.name.asc(),
+        )
         .limit(limit)
     )
     return list(session.execute(stmt).scalars().all())

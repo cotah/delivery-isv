@@ -6,13 +6,19 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class CategorySummary(BaseModel):
-    """Categoria resumida pra embed em listagens (ADR-020)."""
+    """Categoria resumida pra embed em listagens (ADR-020).
+
+    display_order populado sequencialmente pela migration HIGH debt #2
+    (ROW_NUMBER OVER ORDER BY created_at). Admin reorganiza depois pelo
+    painel. Frontend pode usar pra ordenar lista de stores por categoria.
+    """
 
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
     name: str = Field(..., examples=["Pizzaria"])
     slug: str = Field(..., examples=["pizzaria"])
+    display_order: int = Field(..., ge=0, examples=[1])
 
 
 class CitySummary(BaseModel):

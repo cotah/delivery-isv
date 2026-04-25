@@ -45,3 +45,27 @@ class TestCategoryBehavior:
     def test_repr_uses_slug(self) -> None:
         cat = Category(name="Pizzaria", slug="pizzaria")
         assert "pizzaria" in repr(cat)
+
+
+class TestCategoryDisplayOrder:
+    """Ordenação de categorias (HIGH debt #2, 2026-04-26).
+
+    Migration popula display_order sequencial via ROW_NUMBER OVER (ORDER BY
+    created_at) — admin reorganiza depois pelo painel.
+    """
+
+    def test_display_order_default_zero(self) -> None:
+        col = Category.__table__.columns["display_order"]
+        assert col.default is not None
+        assert col.default.arg == 0
+        assert col.server_default is not None
+        assert "0" in str(col.server_default.arg)
+
+    def test_display_order_is_not_nullable(self) -> None:
+        assert Category.__table__.columns["display_order"].nullable is False
+
+    def test_repr_includes_display_order(self) -> None:
+        cat = Category(name="Pizzaria", slug="pizzaria", display_order=5)
+        r = repr(cat)
+        assert "pizzaria" in r
+        assert "5" in r

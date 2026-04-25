@@ -2,6 +2,7 @@ from typing import TYPE_CHECKING
 from uuid import UUID
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     ForeignKey,
     Index,
@@ -9,20 +10,24 @@ from sqlalchemy import (
     String,
     Text,
 )
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
 from app.db.base import Base
 from app.db.mixins import SoftDeleteMixin, TimestampMixin
 from app.db.types import UUIDPK
-from app.domain.enums import ProductStatus
+from app.domain.enums import MenuSection, ProductStatus
 
 if TYPE_CHECKING:
     from app.models.addon_group import AddonGroup
     from app.models.product_variation import ProductVariation
     from app.models.store import Store
 
-# CHECK constraint gerada dinamicamente do enum (ADR-006)
+# CHECK constraints geradas dinamicamente dos enums (ADR-006).
+# Padrão _<TABLE>_<COLUMN>_CHECK pra constantes module-level.
 _PRODUCT_STATUS_CHECK = "status IN (" + ", ".join(f"'{s.value}'" for s in ProductStatus) + ")"
+_PRODUCT_MENU_SECTION_CHECK = (
+    "menu_section IN (" + ", ".join(f"'{s.value}'" for s in MenuSection) + ")"
+)
 
 
 class Product(Base, TimestampMixin, SoftDeleteMixin):
@@ -69,6 +74,29 @@ class Product(Base, TimestampMixin, SoftDeleteMixin):
         nullable=True,
     )
 
+    # Organização do cardápio (HIGH debt #2, 2026-04-26).
+    # display_order: posição dentro do menu da loja (lojista define no painel).
+    # menu_section: seção pra agrupamento no frontend (D5: frontend agrupa).
+    # featured: destaque no topo (similar "em promoção" do iFood).
+    display_order: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default="0",
+    )
+    menu_section: Mapped[MenuSection] = mapped_column(
+        String(20),
+        nullable=False,
+        default=MenuSection.OTHER,
+        server_default=MenuSection.OTHER.value,
+    )
+    featured: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
+
     # ORM relationships — lazy="raise" obriga eager load explícito (selectinload).
     # N+1 vira bug detectável em vez de silencioso.
     store: Mapped["Store"] = relationship("Store", lazy="raise")
@@ -84,12 +112,31 @@ class Product(Base, TimestampMixin, SoftDeleteMixin):
 
     __table_args__ = (
         CheckConstraint(_PRODUCT_STATUS_CHECK, name="status"),
+        CheckConstraint(_PRODUCT_MENU_SECTION_CHECK, name="menu_section"),
         Index("ix_products_store_id", "store_id"),
         Index("ix_products_status", "status"),
     )
 
+    @validates("menu_section")
+    def _validate_menu_section(self, _key: str, value: str | MenuSection) -> MenuSection:
+        """Defense-in-depth ADR-010: rejeita valor inválido antes do flush.
+
+        Aceita instância de MenuSection direto OU string crua válida.
+        Pattern espelha _validate_status em ProductVariation (CP1 HIGH).
+        """
+        if isinstance(value, MenuSection):
+            return value
+        try:
+            return MenuSection(value)
+        except ValueError as exc:
+            raise ValueError(
+                f"Invalid menu section: {value!r}. Expected one of {[s.value for s in MenuSection]}"
+            ) from exc
+
     def __repr__(self) -> str:
         return (
             f"<Product id={self.id} name={self.name!r} "
-            f"store_id={self.store_id} status={self.status}>"
+            f"store_id={self.store_id} status={self.status} "
+            f"section={self.menu_section} order={self.display_order} "
+            f"featured={self.featured}>"
         )
