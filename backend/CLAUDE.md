@@ -27,7 +27,7 @@
 - `alembic_version` — 1 row (controle do Alembic)
 
 ### Migrations
-**19 aplicadas** em sequência:
+**20 aplicadas** em sequência:
 1. `57aa2a205690` — create cities table
 2. `ffd2034a50bd` — seed mg cities
 3. `6ebc0349ab8c` — create customers table
@@ -47,9 +47,10 @@
 17. `661195884f97` — add status to product_variations (HIGH debt #3)
 18. `90b06a960788` — add display_order/menu_section/featured to products + display_order to categories (HIGH debt #2)
 19. `d9a8d7e19f52` — rename product_variations status constraint (LOW debt fix — remove duplicate prefix from CP1 HIGH)
+20. `b964b10e6672` — add Store extension fields description/phone/minimum_order_cents/cover_image/logo (HIGH debt #1, CP1a — ADR-026)
 
 ### Qualidade
-- **511 testes** passando em ~2.8s
+- **535 testes** passando em ~2.8s
 - **mypy strict** limpo em **110 source files**
 - **ruff check** + **ruff format** limpos
 - Zero `# noqa`, zero `# type: ignore` novos (2 narrow ignores legítimos pré-existentes em test_base.py CP2 com justificativa documentada)
@@ -118,7 +119,7 @@ Cliente real consegue: POST /auth/request-otp → recebe SMS → POST /auth/veri
 2. Rate limit phone-based (CP3c) — slowapi async key_func limitation, antes de scale
 3. Fail-open runtime Redis (CP3c) — middleware custom, antes de staging Railway
 
-**Ciclo Débitos HIGH pré-piloto — EM ANDAMENTO (2/3 checkpoints):**
+**Ciclo Débitos HIGH pré-piloto — EM ANDAMENTO (2/3 checkpoints + CP1a do #1 feito):**
 
 Decisão estratégica revisada em 2026-04-26 (pós-descanso): zerar débitos HIGH antes de Customer/Order. Pattern profissional pra evitar que débito vire crise no piloto Tarumirim.
 
@@ -160,11 +161,34 @@ CheckConstraint do CP1 HIGH (3159442) tinha nome com prefixo duplicado no banco:
 - ROW_NUMBER OVER + PARTITION BY pattern pra popular `display_order` em rows pré-existentes — funciona com tabelas vazias (no-op limpo) e populadas (atribui sequência por grupo).
 - Repository com ordenação composta (`featured DESC, display_order ASC, name ASC`) — combina sinal de destaque + ordem manual + fallback alfabético, pattern aplicável a qualquer listagem ordenável.
 
-**Débitos HIGH restantes (1/3):**
-1. Expansão do modelo Store — campos description/phone/cover/logo/minimum_order/preparation_minutes + opening_hours (decisão arquitetural pendente: JSON simples vs tabela `store_hours`).
+CP1a do Débito #1 (commit c3dfecc) — Store expansion parte 1. Resolve 5 dos 7 itens do débito HIGH #1.
+- Store ganha 5 campos: `description` (Text, max 2000 Pydantic), `phone` (E.164 obrigatório NOT NULL via Opção E), `minimum_order_cents` (Integer nullable, NULL=sem mínimo), `cover_image` (URL HttpUrl), `logo` (URL HttpUrl).
+- Migration aditiva `b964b10e6672` (banco vazio confirmado: 0 stores). Opção E: `phone NOT NULL` direto, sem placeholder.
+- CheckConstraint `ck_stores_minimum_order_cents_non_negative` (NULL-safe) — só sufixo passado, naming_convention prefixa.
+- `@validates("phone")` reusa `validate_phone_e164` do User (pattern ADR-009).
+- `__repr__` aplica `mask_phone_for_log` proativamente (ADR-026 dec. 8) — antecipa débito LGPD do User.
+- `ProductRead.image_url` evolui `str | None` → `HttpUrl | None` (Caminho 2 escopo total — pattern HttpUrl em TODOS campos URL do projeto). Cast em service preserva mypy strict sem `# type: ignore`.
+- ADR-026 criado cobrindo as 8 decisões do HIGH #1 inteiro (CP1a + CP1b futuro).
+- 24 testes novos (16 model TestStoreExtensionFields + 5 endpoint TestStoreExtensionResponseShape + 3 PII regression). 511 → 535.
+
+Decisões deste CP1a (referência rápida — todas em ADR-026):
+- **D1 phone Store** = E.164 obrigatório, **não-unique** (lojas diferentes podem usar mesma central). Reusa validador do User.
+- **D2 Phone NOT NULL strategy** = Opção E (banco vazio, sem placeholder). Plano de remediação documentado pra futuro DB com dados.
+- **D3 HttpUrl pattern** em TODOS campos URL (cover_image, logo, image_url). Sem fragmentação "este sim, aquele não".
+- **D4 description** = Text + max_length=2000 Pydantic (validação na camada certa, pattern Order.notes/Product.description).
+- **D5 mask phone proativo** no `__repr__` (custo zero, antecipa débito LGPD).
+
+**Patterns reusáveis emergidos no CP1a HIGH #1:**
+- Verificação de segurança de dados ANTES de mudar schema validador (count + URLs válidas antes de virar HttpUrl). Pattern profissional pra futuras migrações de schema. Caught em CP1a — products vazio liberou Caminho 2 escopo total.
+- Opção E pra migration NOT NULL em banco vazio: mais honesto que placeholder. Plano de remediação documentado no ADR pra cenário futuro com dados.
+- HttpUrl em TODOS campos URL do projeto (cover_image, logo, image_url): consistência arquitetural. Não introduzir fragmentação "este sim, aquele não".
+- Pattern proativo de aplicar fixes preventivos quando custo é zero: `mask_phone_for_log` em Store antes mesmo do User ser corrigido. Evita criar 2 débitos LGPD idênticos.
+
+**Débitos HIGH restantes (apenas CP1b do #1):**
+1. CP1b do Débito #1 — `StoreOpeningHours` table + service helper "aberto agora?" + endpoints expõem horários. **ÚLTIMO sub-checkpoint do ciclo HIGH.**
 
 ### Arquitetura documentada
-- **25 ADRs** em `C:\Users\henri\Documents\My second mind\Projetos\ISV Delivery\11 - Decisões Técnicas (log).md`
+- **26 ADRs** em `C:\Users\henri\Documents\My second mind\Projetos\ISV Delivery\11 - Decisões Técnicas (log).md`
 - 9 StrEnums em `app/domain/enums.py`: `Environment`, `AddressType`, `TaxIdType`, `StoreStatus`, `ProductStatus`, `ProductVariationStatus`, `AddonGroupType`, `MenuSection`, `OrderStatus`
 
 ---
@@ -398,50 +422,43 @@ docker exec delivery-postgres-1 psql -U isv -d isv_delivery -c "SELECT ..."
 
 ## 6. Próximo passo sugerido
 
-**Status:** Ciclo Débitos HIGH em construção. **2/3 débitos resolvidos**. 1 débito LOW resolvido em paralelo. Falta apenas Débito #1 (Store expansion).
+**Status:** Ciclo Débitos HIGH em construção. **2/3 débitos resolvidos + CP1a do #1 feito** (commit c3dfecc). Falta apenas **CP1b do Débito #1** (`StoreOpeningHours` + service + endpoints) para fechar ciclo HIGH 3/3.
 
 **Ordem dos ciclos (revisada em 2026-04-26):**
 
-1. **Débitos HIGH pré-piloto** ← em andamento, 2/3 done
+1. **Débitos HIGH pré-piloto** ← em andamento, 2/3 + CP1a done
 2. Customer endpoints (depois dos HIGH)
 3. Order endpoints (requer Customer, depois)
 
 **Débitos HIGH — status atual:**
 
-- [x] **#3 Toggle ProductVariation individual** — RESOLVIDO no commit 3159442 (CP1 do ciclo HIGH). StrEnum ACTIVE/INACTIVE + status column + filtro no service combinando contratos com herança CP3.
-- [x] **#2 Organização do cardápio** — RESOLVIDO no commit 16e664d (CP2 do ciclo HIGH). `display_order` em Product/Category + `menu_section` (StrEnum `MenuSection` com 9 valores) + `featured` (Boolean). Repository com ordenação composta. ROW_NUMBER popula rows pré-existentes via PARTITION BY store_id (products) e global (categories).
-- [ ] **#1 Expansão Store** — pendente. **Último HIGH pré-piloto.**
+- [x] **#3 Toggle ProductVariation individual** — commit 3159442 (CP1 do ciclo HIGH).
+- [x] **#2 Organização do cardápio** — commit 16e664d (CP2 do ciclo HIGH).
+- [ ] **#1 Expansão Store** — em andamento (CP1a feito, falta CP1b):
+  - [x] **CP1a** — 5 campos triviais + phone NOT NULL + ADR-026 (commit c3dfecc, 2026-04-26)
+  - [ ] **CP1b** — `StoreOpeningHours` table + service "aberto agora?" + endpoints
 
 **Débito LOW resolvido em paralelo:** commit b9e79c7 — rename de `ck_product_variations_status` removendo prefix duplicado herdado do CP1 HIGH. Cosmético, descoberto durante CP2 HIGH, resolvido na mesma sessão (~30min).
 
-**Próximo passo: Débito #1 (Expansão Store) — ÚLTIMO débito HIGH pré-piloto**
+**Próximo passo: CP1b do Débito HIGH #1 — `StoreOpeningHours`**
 
-Campos a adicionar em Store:
-- `description` (Text)
-- `phone` (E.164, similar a Customer — ADR-009)
-- `opening_hours` (decisão arquitetural pendente: JSON simples vs tabela `store_hours` dedicada)
-- `minimum_order_cents` (Integer)
-- `cover_image_url` (URL)
-- `logo_url` (URL)
-- `average_preparation_minutes` (Integer)
+Escopo (todas as decisões já documentadas no ADR-026):
+- Tabela nova `store_opening_hours(id, store_id FK CASCADE, day_of_week 0-6, open_time Time, close_time Time)`
+- Service helper "loja aberta agora?" com lógica de timezone `America/Sao_Paulo` + cruzar meia-noite (`close_time < open_time` — ADR-026 dec. 3)
+- Endpoint expõe `opening_hours: []` em `StoreDetail` (lojas existentes pós-migration ficam sem horário, lojista preenche depois via painel admin futuro — ADR-026 dec. 4)
 
-**Tamanho:** médio (~1-2 dias ritmo Henrique).
+**Tamanho:** médio (~2-3h ritmo Henrique). Decisões já tomadas no ADR-026, implementação é execução.
 
-**Decisão pendente principal:** `opening_hours` como JSON simples (1 coluna em Store) ou tabela `StoreOpeningHours` dedicada (7 rows típicas, permite "fechado domingos"). Implicações pós-piloto (queries de "loja aberta agora" mais simples com tabela; menos joins com JSON).
+**Após CP1b, ciclo HIGH 100% completo.** Então:
 
-**Risco:** baixo. Extensão pura de Store, zero migração de dados (server_default cobre rows existentes).
-
-Após fechar Débito #1, ciclo HIGH 100% completo. Então Customer cycle.
+- Ciclo Customer (cadastro + endereço + perfil) — ~3-5 dias
+- Ciclo Order (core do produto, requer Customer) — ~8-12 dias
+- Mobile React Native em paralelo (segundo agente)
+- Pagar.me + Zenvia (depende CNPJ)
 
 **Mobile React Native:**
 
-Será iniciado APÓS os 3 débitos HIGH terminarem. Henrique vai abrir segundo agente dedicado ao frontend nesse momento. Backend até lá cobre todas as telas iniciais necessárias (catálogo + login + perfil + cardápio organizado).
-
-**Após Débitos HIGH:**
-
-- Ciclo Customer (cadastro + endereço + perfil) — 6-10h, 3-4 sub-checkpoints
-- Ciclo Order (core do produto, requer Customer) — 15-25h
-- Integração Pagar.me + Zenvia (depende CNPJ)
+Será iniciado APÓS o ciclo HIGH 100% (CP1b fecha o último). Henrique vai abrir segundo agente dedicado ao frontend nesse momento. Backend até lá cobre todas as telas iniciais necessárias (catálogo + login + perfil + cardápio organizado + dados expandidos da loja).
 
 ---
 
