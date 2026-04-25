@@ -30,6 +30,12 @@ class Settings(BaseSettings):
     JWT_SECRET_KEY: SecretStr
     JWT_EXPIRATION_MINUTES: int = 60
 
+    RATE_LIMIT_ENABLED: bool = True
+    RATE_LIMIT_REQUEST_OTP_PHONE: str = "3/hour"
+    RATE_LIMIT_REQUEST_OTP_IP: str = "10/hour"
+    RATE_LIMIT_VERIFY_OTP_PHONE: str = "10/hour"
+    RATE_LIMIT_VERIFY_OTP_IP: str = "30/hour"
+
 
 @lru_cache
 def get_settings() -> Settings:

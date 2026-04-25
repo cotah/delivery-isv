@@ -1,24 +1,44 @@
-"""Serviço de OTP — request-otp (ADR-020 layer: service, ADR-025)."""
+"""Serviço de OTP — request-otp + verify-otp (ADR-020 layer: service, ADR-025)."""
 
 import hashlib
+import hmac
 import logging
 import secrets
 
 from sqlalchemy.orm import Session
 
+from app.models.user import User
 from app.repositories import otp as otp_repository
+from app.repositories import user as user_repository
+from app.services.auth.jwt import create_access_token
 from app.services.sms.base import SMSProvider, SMSSendError
-from app.utils.validators import mask_phone_for_display
+from app.utils.validators import mask_phone_for_display, mask_phone_for_log
 
 logger = logging.getLogger(__name__)
 
 OTP_EXPIRATION_MINUTES = 10
+MAX_OTP_ATTEMPTS = 3
+
+# Mensagem ÚNICA para todos os 5 cenários de falha em verify-otp
+# (anti-enumeração, ADR-025 decisão 5 + D8 do CP3c). Não diferenciar
+# externamente: hash errado, expirado, consumed, attempts esgotados,
+# OTP não encontrado — todos retornam mesma string.
+INVALID_OTP_MESSAGE = "Código inválido, expirado ou já utilizado."
 
 
 class OtpRequestFailedError(Exception):
     """Falha ao solicitar OTP (problema no SMS provider).
 
     Route converte em HTTP 502 com code=sms_provider_error (ADR-022).
+    """
+
+
+class InvalidOtpError(Exception):
+    """Falha genérica em verify-otp.
+
+    Route converte em HTTP 400 com code=invalid_otp_code + INVALID_OTP_MESSAGE.
+    Anti-enumeração: cobre 5 cenários (hash errado, expirado, consumed,
+    attempts esgotados, not_found) com mesma resposta externa.
     """
 
 
@@ -107,3 +127,91 @@ def request_otp(
     )
 
     return mask_phone_for_display(phone)
+
+
+def verify_otp(
+    session: Session,
+    phone: str,
+    code: str,
+) -> tuple[User, str]:
+    """Fluxo completo de verify-otp: busca OTP, valida, cria/busca User, emite JWT.
+
+    ADR-025 decisões 2, 3, 5, 6, 7.
+
+    Ordem de operações (crítica pra segurança):
+    1. SELECT FOR UPDATE no OtpCode ativo do phone — lock de linha
+    2. Incrementar attempts ANTES de validar hash (anti brute force)
+    3. Se attempts > MAX_OTP_ATTEMPTS: marcar consumed, raise
+    4. Validar hash via hmac.compare_digest (constant-time — anti timing attack)
+    5. Marcar OtpCode como consumed (anti-replay)
+    6. find_or_create_user (lazy creation, ADR-025 decisão 6)
+    7. session.commit() — único commit do fluxo (todos UPDATEs juntos)
+    8. create_access_token
+
+    Anti-enumeração: 5 cenários de erro (not_found, attempts esgotados,
+    hash errado) viram MESMO InvalidOtpError com INVALID_OTP_MESSAGE.
+    Logs internos diferenciam pra debug, response externa é uniforme.
+
+    Args:
+        session: SQLAlchemy session (em transação aberta — caller wrap)
+        phone: phone E.164 validado (Pydantic)
+        code: 6 dígitos (Pydantic)
+
+    Returns:
+        Tupla (User, access_token_jwt).
+
+    Raises:
+        InvalidOtpError: cobre todos os 5 cenários com mesma mensagem.
+    """
+    otp = otp_repository.find_active_otp_for_phone_for_update(session, phone)
+    if otp is None:
+        # Cenário 1 (not_found / expired / already_consumed): nada ativo encontrado.
+        logger.info("verify_otp.not_found phone=%s", mask_phone_for_log(phone))
+        raise InvalidOtpError(INVALID_OTP_MESSAGE)
+
+    # Increment ANTES de validar hash — protege contra brute force
+    # (mesmo se hash falhar, attempts persiste no commit final).
+    otp_repository.increment_otp_attempts(session, otp.id)
+    session.flush()
+    session.refresh(otp)
+
+    # Cenário 2 (attempts): excedeu MAX — invalidar permanentemente
+    if otp.attempts > MAX_OTP_ATTEMPTS:
+        otp_repository.mark_otp_consumed(session, otp.id)
+        session.commit()
+        logger.warning(
+            "verify_otp.attempts_exhausted phone=%s attempts=%d",
+            mask_phone_for_log(phone),
+            otp.attempts,
+        )
+        raise InvalidOtpError(INVALID_OTP_MESSAGE)
+
+    # Cenário 3 (hash): comparar com constant-time (anti timing attack)
+    expected_hash = _hash_otp_code(code)
+    if not hmac.compare_digest(otp.code_hash, expected_hash):
+        # Persistir o increment de attempts mesmo em falha de hash.
+        session.commit()
+        logger.info(
+            "verify_otp.invalid_hash phone=%s attempts=%d",
+            mask_phone_for_log(phone),
+            otp.attempts,
+        )
+        raise InvalidOtpError(INVALID_OTP_MESSAGE)
+
+    # Hash bate — marcar consumed (anti-replay) e criar/buscar User
+    otp_repository.mark_otp_consumed(session, otp.id)
+    user = user_repository.find_or_create_user(session, phone)
+
+    # Único commit do fluxo: todos os UPDATEs juntos. Lock FOR UPDATE
+    # liberado aqui — outros requests verify-otp do mesmo phone destrancam.
+    session.commit()
+
+    token = create_access_token(user_id=user.id, phone=phone)
+
+    logger.info(
+        "verify_otp.success phone=%s user_id=%s",
+        mask_phone_for_log(phone),
+        user.id,
+    )
+
+    return user, token

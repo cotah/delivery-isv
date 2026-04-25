@@ -30,6 +30,8 @@ class ErrorCode(StrEnum):
     NOT_FOUND = "not_found"
     STORE_NOT_FOUND = "store_not_found"
     SMS_PROVIDER_ERROR = "sms_provider_error"
+    INVALID_OTP_CODE = "invalid_otp_code"
+    RATE_LIMITED = "rate_limited"
     INTERNAL_ERROR = "internal_error"
 
 

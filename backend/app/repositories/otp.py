@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import CursorResult, update
+from sqlalchemy import CursorResult, select, update
 from sqlalchemy.orm import Session
 
 from app.models.otp_code import OtpCode
@@ -95,4 +95,51 @@ def mark_otp_consumed(session: Session, otp_id: UUID) -> None:
     """
     now = datetime.now(UTC)
     stmt = update(OtpCode).where(OtpCode.id == otp_id).values(consumed_at=now)
+    session.execute(stmt)
+
+
+def find_active_otp_for_phone_for_update(session: Session, phone: str) -> OtpCode | None:
+    """Busca OTP ativo do phone com SELECT FOR UPDATE (lock de linha).
+
+    'Ativo' = consumed_at IS NULL AND expires_at > now.
+
+    SELECT FOR UPDATE serializa verify-otp concorrentes no mesmo OtpCode:
+    - Request A: lock + validação + UPDATE attempts — lock mantido até commit
+    - Request B: aguarda lock até A commitar
+    Previne race que duplicaria incremento de attempts ou consumed_at duplo.
+
+    Compatível com expire_on_commit=False — lock é mantido por
+    session.commit()/rollback(), independente da config de expiração.
+
+    Args:
+        session: SQLAlchemy session (em transação aberta)
+        phone: phone E.164
+
+    Returns:
+        OtpCode ativo (com lock) ou None se nenhum encontrado.
+    """
+    now = datetime.now(UTC)
+    stmt = (
+        select(OtpCode)
+        .where(
+            OtpCode.phone == phone,
+            OtpCode.consumed_at.is_(None),
+            OtpCode.expires_at > now,
+        )
+        .with_for_update()
+    )
+    return session.execute(stmt).scalar_one_or_none()
+
+
+def increment_otp_attempts(session: Session, otp_id: UUID) -> None:
+    """Incrementa OtpCode.attempts em 1 (UPDATE atomic).
+
+    Chamado ANTES de validar hash em verify-otp — protege contra
+    brute force. Caller responsável pelo commit.
+
+    Args:
+        session: SQLAlchemy session
+        otp_id: UUID do OtpCode
+    """
+    stmt = update(OtpCode).where(OtpCode.id == otp_id).values(attempts=OtpCode.attempts + 1)
     session.execute(stmt)

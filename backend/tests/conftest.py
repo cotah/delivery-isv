@@ -17,11 +17,28 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db_session, get_sms_provider
+from app.core.rate_limit import limiter
 from app.db.session import get_engine
 from app.main import app
 from app.services.sms.mock import MockSMSProvider
 from tests.utils.phone import generate_valid_phone_e164
 from tests.utils.tax_id import generate_valid_cnpj
+
+
+@pytest.fixture(autouse=True)
+def _reset_rate_limiter() -> Generator[None, None, None]:
+    """Reseta o rate limiter (slowapi/Redis) antes de cada teste.
+
+    Sem reset, contagens persistidas em Redis vazariam entre testes —
+    o 11º POST /auth/request-otp em qualquer teste falharia 429
+    (limit 10/hora por IP, e TestClient sempre usa mesmo "IP").
+
+    Testes específicos de rate limit acumulam contagens DENTRO do teste
+    (reset só ocorre entre testes, não dentro).
+    """
+    limiter.reset()
+    yield
+    limiter.reset()
 
 
 @pytest.fixture
