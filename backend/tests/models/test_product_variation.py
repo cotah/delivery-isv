@@ -1,7 +1,9 @@
 from uuid import uuid4
 
+import pytest
 from sqlalchemy import CheckConstraint, Integer, Table
 
+from app.domain.enums import ProductVariationStatus
 from app.models.product_variation import ProductVariation
 
 
@@ -107,3 +109,65 @@ class TestProductVariationBehavior:
         # ADR-007: dinheiro em _cents INTEGER — nunca FLOAT nem DECIMAL
         col = ProductVariation.__table__.columns["price_cents"]
         assert isinstance(col.type, Integer)
+
+
+class TestProductVariationStatus:
+    """Toggle individual de ProductVariation (HIGH debt #3, 2026-04-26)."""
+
+    def test_status_default_is_active(self) -> None:
+        # Python default: novo objeto Python pega ACTIVE no construtor.
+        col = ProductVariation.__table__.columns["status"]
+        assert col.default is not None
+        assert col.default.arg == ProductVariationStatus.ACTIVE
+        # Server default: rows pré-existentes (zero em prod) recebem 'active'.
+        assert col.server_default is not None
+        assert "active" in str(col.server_default.arg)
+
+    def test_status_column_is_not_nullable(self) -> None:
+        col = ProductVariation.__table__.columns["status"]
+        assert col.nullable is False
+
+    def test_status_check_constraint_present(self) -> None:
+        table = ProductVariation.__table__
+        assert isinstance(table, Table)
+        checks = [c for c in table.constraints if isinstance(c, CheckConstraint)]
+        status_check = next(
+            (c for c in checks if c.name == "ck_product_variations_status"),
+            None,
+        )
+        assert status_check is not None, "ck_product_variations_status not found"
+        sql_text = str(status_check.sqltext)
+        assert "active" in sql_text
+        assert "inactive" in sql_text
+
+    def test_validates_rejects_invalid_status_string(self) -> None:
+        # @validates roda antes da persistência — defense-in-depth ADR-010.
+        with pytest.raises(ValueError, match="Invalid variation status"):
+            ProductVariation(
+                product_id=uuid4(),
+                name="Test",
+                price_cents=1000,
+                sort_order=0,
+                status="bogus_value",
+            )
+
+    def test_validates_accepts_enum_directly(self) -> None:
+        # Aceitar enum direto (não só string crua).
+        var = ProductVariation(
+            product_id=uuid4(),
+            name="Test",
+            price_cents=1000,
+            sort_order=0,
+            status=ProductVariationStatus.INACTIVE,
+        )
+        assert var.status == ProductVariationStatus.INACTIVE
+
+    def test_repr_includes_status(self) -> None:
+        var = ProductVariation(
+            product_id=uuid4(),
+            name="Pequena",
+            price_cents=3500,
+            sort_order=0,
+            status=ProductVariationStatus.INACTIVE,
+        )
+        assert "inactive" in repr(var)

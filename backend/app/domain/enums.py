@@ -81,6 +81,25 @@ class AddonGroupType(StrEnum):
     MULTIPLE = "multiple"
 
 
+class ProductVariationStatus(StrEnum):
+    """Status individual da variação (HIGH debt #3, resolvido em 2026-04-26).
+
+    Toggle binário pra lojista controlar disponibilidade fina sem mexer
+    no produto inteiro. Diferente de ProductStatus (3 valores: ACTIVE,
+    OUT_OF_STOCK, PAUSED), variação tem só ACTIVE/INACTIVE — semântica
+    do lojista é binária ("essa opção tá disponível ou não").
+
+    Reversível: se realidade pedir distinção entre OUT_OF_STOCK e PAUSED
+    em variations, expansão é migration DROP CHECK + ADD CHECK + atualizar
+    enum (ADR-006).
+
+    Default ACTIVE: variations recém-criadas estão disponíveis.
+    """
+
+    ACTIVE = "active"
+    INACTIVE = "inactive"
+
+
 class OrderStatus(StrEnum):
     """Status do pedido (ADR-017).
 

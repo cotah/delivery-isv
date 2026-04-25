@@ -347,3 +347,125 @@ class TestListStoreProductsEndpoint:
         names = [g["name"] for g in response.json()["items"][0]["addon_groups"]]
 
         assert names == ["Gama", "Alfa", "Beta"]
+
+
+class TestVariationFilteringInMenu:
+    """Toggle individual de ProductVariation (HIGH debt #3, 2026-04-26).
+
+    Variation INACTIVE removida do response. Produto com TODAS variations
+    INACTIVE vira is_available=false. Produto sem variations cadastradas
+    (estado anômalo) preserva is_available=true (decisão D3 branda).
+    """
+
+    def test_inactive_variations_not_in_response(
+        self,
+        client: TestClient,
+        store_factory: Any,
+        product_factory: Any,
+        product_variation_factory: Any,
+    ) -> None:
+        from app.domain.enums import ProductVariationStatus
+
+        store = store_factory(status=StoreStatus.APPROVED)
+        product = product_factory(store=store)
+        product_variation_factory(product=product, name="Pequena")
+        product_variation_factory(
+            product=product,
+            name="Inativa",
+            status=ProductVariationStatus.INACTIVE,
+        )
+        product_variation_factory(product=product, name="Grande")
+
+        response = client.get(f"/api/v1/stores/{store.id}/products")
+
+        variations = response.json()["items"][0]["variations"]
+        names = {v["name"] for v in variations}
+        assert names == {"Pequena", "Grande"}, f"INACTIVE leaked: {names}"
+
+    def test_product_with_all_variations_inactive_is_unavailable(
+        self,
+        client: TestClient,
+        store_factory: Any,
+        product_factory: Any,
+        product_variation_factory: Any,
+    ) -> None:
+        from app.domain.enums import ProductVariationStatus
+
+        store = store_factory(status=StoreStatus.APPROVED)
+        product = product_factory(store=store, status=ProductStatus.ACTIVE)
+        product_variation_factory(product=product, name="X", status=ProductVariationStatus.INACTIVE)
+        product_variation_factory(product=product, name="Y", status=ProductVariationStatus.INACTIVE)
+
+        response = client.get(f"/api/v1/stores/{store.id}/products")
+        item = response.json()["items"][0]
+
+        assert item["is_available"] is False
+        assert item["variations"] == []
+
+    def test_product_with_mixed_variations_returns_only_active_ones(
+        self,
+        client: TestClient,
+        store_factory: Any,
+        product_factory: Any,
+        product_variation_factory: Any,
+    ) -> None:
+        from app.domain.enums import ProductVariationStatus
+
+        store = store_factory(status=StoreStatus.APPROVED)
+        product = product_factory(store=store, status=ProductStatus.ACTIVE)
+        product_variation_factory(
+            product=product, name="Ativa1", status=ProductVariationStatus.ACTIVE
+        )
+        product_variation_factory(
+            product=product, name="Inativa", status=ProductVariationStatus.INACTIVE
+        )
+        product_variation_factory(
+            product=product, name="Ativa2", status=ProductVariationStatus.ACTIVE
+        )
+
+        response = client.get(f"/api/v1/stores/{store.id}/products")
+        item = response.json()["items"][0]
+
+        assert item["is_available"] is True
+        names = {v["name"] for v in item["variations"]}
+        assert names == {"Ativa1", "Ativa2"}
+
+    def test_product_without_variations_unaffected(
+        self,
+        client: TestClient,
+        store_factory: Any,
+        product_factory: Any,
+    ) -> None:
+        """Regressão: produtos sem variations cadastradas continuam funcionando.
+
+        Decisão D3 branda do CP1 do ciclo Débitos HIGH: produto com 0 variations
+        é estado anômalo (FK em OrderItem é NOT NULL — cliente não consegue
+        comprar), mas backend não muda is_available pra preservar testes do
+        CP3 catálogo. Frontend lida.
+        """
+        store = store_factory(status=StoreStatus.APPROVED)
+        product_factory(store=store, status=ProductStatus.ACTIVE)
+
+        response = client.get(f"/api/v1/stores/{store.id}/products")
+        item = response.json()["items"][0]
+
+        assert item["is_available"] is True
+        assert item["variations"] == []
+
+    def test_active_variation_is_available_true_in_response(
+        self,
+        client: TestClient,
+        store_factory: Any,
+        product_factory: Any,
+        product_variation_factory: Any,
+    ) -> None:
+        """Variation ACTIVE no response sempre tem is_available=true por construção."""
+        store = store_factory(status=StoreStatus.APPROVED)
+        product = product_factory(store=store, status=ProductStatus.ACTIVE)
+        product_variation_factory(product=product, name="Única")
+
+        response = client.get(f"/api/v1/stores/{store.id}/products")
+        variations = response.json()["items"][0]["variations"]
+
+        assert len(variations) == 1
+        assert variations[0]["is_available"] is True

@@ -5,7 +5,7 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
-from app.domain.enums import ProductStatus
+from app.domain.enums import ProductStatus, ProductVariationStatus
 from app.repositories import products as products_repository
 from app.repositories import stores as stores_repository
 from app.schemas.products import (
@@ -49,21 +49,41 @@ def _build_addon_group_summary(group: "AddonGroup") -> AddonGroupSummary | None:
 def _build_product_read(product: "Product") -> ProductRead:
     """Monta ProductRead com aninhamento + is_available calculado.
 
-    is_available herdado nas variations a partir do status do produto pai
-    (débito documentado: toggle fino por variation exige
-    ProductVariationStatus em ciclo próprio).
-    """
-    is_product_available = product.status == ProductStatus.ACTIVE
+    is_available do Product (HIGH debt #3 resolvido em 2026-04-26):
+    - Product.status deve ser ACTIVE
+    - SE Product tem variations cadastradas, pelo menos 1 deve estar ACTIVE
+      (caso contrário é_available=false — sem variation selecionável)
+    - SE Product tem 0 variations cadastradas (estado anômalo de configuração),
+      preserva is_available=true — backward compat com testes do CP3 catálogo.
+      Frontend lida com produto sem variation (FK NOT NULL em OrderItem
+      bloqueia compra de qualquer forma).
 
+    Variations INACTIVE filtradas DO RESPONSE (não aparecem no array).
+    Variations soft-deleted também filtradas.
+    """
+    active_variations = [
+        v
+        for v in product.variations
+        if v.deleted_at is None and v.status == ProductVariationStatus.ACTIVE
+    ]
+
+    is_product_available = product.status == ProductStatus.ACTIVE and (
+        not product.variations or len(active_variations) > 0
+    )
+
+    # Variation.is_available HERDA do Product.status (UX: produto OUT_OF_STOCK
+    # mostra variations acinzentadas, mesmo sendo ACTIVE em si). Variations
+    # INACTIVE já foram filtradas — não aparecem no array. Lógica preserva
+    # contrato do CP3 catálogo (variation reflete estado do produto pai pra UX)
+    # E adiciona filtro do toggle individual (CP1 ciclo Débitos HIGH).
     variations_summaries = [
         ProductVariationSummary(
             id=v.id,
             name=v.name,
             price_cents=v.price_cents,
-            is_available=is_product_available,
+            is_available=(product.status == ProductStatus.ACTIVE),
         )
-        for v in sorted(product.variations, key=lambda x: (x.sort_order, x.name))
-        if v.deleted_at is None
+        for v in sorted(active_variations, key=lambda x: (x.sort_order, x.name))
     ]
 
     groups_raw_sorted = sorted(

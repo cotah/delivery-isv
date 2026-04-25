@@ -41,9 +41,15 @@ class AddonGroupSummary(BaseModel):
 class ProductVariationSummary(BaseModel):
     """Variação do produto (tamanho, por exemplo). ADR-020.
 
-    is_available herdado do produto pai: produto ACTIVE → variação available,
-    produto OUT_OF_STOCK → variação não-available.
-    Débito técnico HIGH: toggle individual via ProductVariationStatus.
+    Lógica do response (HIGH debt #3 resolvido em 2026-04-26):
+    - Variations INACTIVE (toggle individual do lojista) são FILTRADAS
+      do array antes de virar Summary — não aparecem no response.
+    - Variations ACTIVE no array têm is_available HERDADO do Product.status:
+      produto ACTIVE → variation.is_available=true; produto OUT_OF_STOCK →
+      variation.is_available=false (UX: variation acinzentada quando produto
+      todo está fora de estoque).
+    - Produto com TODAS variations INACTIVE → product.is_available=false
+      e variations=[]. Nenhuma variation selecionável.
     """
 
     model_config = ConfigDict(from_attributes=True)

@@ -78,11 +78,13 @@ def get_store(
     summary="Cardápio da loja",
     description=(
         "Retorna o cardápio completo da loja aprovada, com produtos, variações e "
-        "adicionais aninhados. Produtos e variações PAUSED ficam escondidos. "
-        "Produtos OUT_OF_STOCK aparecem com is_available=false. Não pagina "
-        "tradicionalmente — query param `limit` (default 500, max 1000) como "
-        "limite de segurança. Retorna 404 se loja não existe, não está aprovada "
-        "ou foi removida. Endpoint público — não exige autenticação."
+        "adicionais aninhados. Produtos PAUSED ficam escondidos. Produtos "
+        "OUT_OF_STOCK aparecem com is_available=false. Variations INACTIVE "
+        "(toggle individual) são filtradas do response — produto com todas "
+        "variations INACTIVE vira is_available=false. Não pagina tradicionalmente "
+        "— query param `limit` (default 500, max 1000) como limite de segurança. "
+        "Retorna 404 se loja não existe, não está aprovada ou foi removida. "
+        "Endpoint público — não exige autenticação."
     ),
     responses={
         404: {
