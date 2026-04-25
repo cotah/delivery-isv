@@ -10,11 +10,14 @@
 
 import uuid
 from collections.abc import Generator
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
+
+if TYPE_CHECKING:
+    from app.models.user import User
 
 from app.api.deps import get_db_session, get_sms_provider
 from app.core.rate_limit import limiter
@@ -344,3 +347,42 @@ def otp_code_factory(db_session: Session) -> Any:
         return otp
 
     return _create
+
+
+@pytest.fixture
+def authenticated_user(db_session: Session) -> "User":
+    """User persistido no banco para uso em testes autenticados (CP4).
+
+    Phone gerado via generate_valid_phone_e164 pra evitar conflito UNIQUE
+    com testes de auth real (request-otp/verify-otp). Usa db_session.flush()
+    em vez de commit() pra preservar rollback automático no teardown
+    (lição CP1 — fixture compartilhada não fecha transação real).
+    """
+    from app.models.user import User
+
+    user = User(phone=generate_valid_phone_e164())
+    db_session.add(user)
+    db_session.flush()
+    db_session.refresh(user)
+    return user
+
+
+@pytest.fixture
+def authenticated_client(
+    client: TestClient,
+    authenticated_user: "User",
+) -> TestClient:
+    """TestClient com header Authorization: Bearer <jwt-real> embutido (CP4).
+
+    Gera JWT real via create_access_token (CP3a) — sem mocking.
+    Útil pra testar endpoints protegidos end-to-end. Herda overrides de
+    get_db_session e get_sms_provider da fixture client base.
+    """
+    from app.services.auth.jwt import create_access_token
+
+    token = create_access_token(
+        user_id=authenticated_user.id,
+        phone=authenticated_user.phone,
+    )
+    client.headers["Authorization"] = f"Bearer {token}"
+    return client

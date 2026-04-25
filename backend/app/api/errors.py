@@ -32,6 +32,9 @@ class ErrorCode(StrEnum):
     SMS_PROVIDER_ERROR = "sms_provider_error"
     INVALID_OTP_CODE = "invalid_otp_code"
     RATE_LIMITED = "rate_limited"
+    UNAUTHENTICATED = "unauthenticated"
+    TOKEN_EXPIRED = "token_expired"
+    INVALID_TOKEN = "invalid_token"
     INTERNAL_ERROR = "internal_error"
 
 
@@ -61,8 +64,13 @@ def _build_response(
     code: str,
     message: str,
     details: list[dict[str, Any]] | None = None,
+    headers: dict[str, str] | None = None,
 ) -> JSONResponse:
-    """Monta JSONResponse com formato uniforme do ADR-022."""
+    """Monta JSONResponse com formato uniforme do ADR-022.
+
+    headers: propaga headers do HTTPException (ex: WWW-Authenticate em 401
+    via RFC 6750). Default None preserva comportamento dos handlers existentes.
+    """
     body: dict[str, Any] = {
         "error": {
             "code": code,
@@ -71,7 +79,7 @@ def _build_response(
     }
     if details:
         body["error"]["details"] = details
-    return JSONResponse(status_code=status_code, content=body)
+    return JSONResponse(status_code=status_code, content=body, headers=headers)
 
 
 async def http_exception_handler(
@@ -95,7 +103,9 @@ async def http_exception_handler(
         }
         code = code_map.get(exc.status_code, ErrorCode.INTERNAL_ERROR.value)
         message = str(exc.detail) if exc.detail else "Erro desconhecido"
-    return _build_response(exc.status_code, code, message)
+    # Preserva headers da HTTPException (ex: WWW-Authenticate em 401 RFC 6750).
+    headers = dict(exc.headers) if exc.headers else None
+    return _build_response(exc.status_code, code, message, headers=headers)
 
 
 async def validation_exception_handler(
