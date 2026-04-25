@@ -27,7 +27,7 @@
 - `alembic_version` — 1 row (controle do Alembic)
 
 ### Migrations
-**16 aplicadas** em sequência:
+**17 aplicadas** em sequência:
 1. `57aa2a205690` — create cities table
 2. `ffd2034a50bd` — seed mg cities
 3. `6ebc0349ab8c` — create customers table
@@ -44,9 +44,10 @@
 14. `9fc0a1ebd6ab` — create order_item_addons table
 15. `e16e2e9ee921` — create order_status_logs table
 16. `2e0d02f42dab` — create users and otp_codes tables
+17. `661195884f97` — add status to product_variations (HIGH debt #3)
 
 ### Qualidade
-- **481 testes** passando em ~2.3s
+- **492 testes** passando em ~2.4s
 - **mypy strict** limpo em **110 source files**
 - **ruff check** + **ruff format** limpos
 - Zero `# noqa`, zero `# type: ignore` novos (2 narrow ignores legítimos pré-existentes em test_base.py CP2 com justificativa documentada)
@@ -114,6 +115,34 @@ Cliente real consegue: POST /auth/request-otp → recebe SMS → POST /auth/veri
 1. Estratégia de secrets no Claude Code (CP3a) — antes de staging ou multi-dev
 2. Rate limit phone-based (CP3c) — slowapi async key_func limitation, antes de scale
 3. Fail-open runtime Redis (CP3c) — middleware custom, antes de staging Railway
+
+**Ciclo Débitos HIGH pré-piloto — EM ANDAMENTO (1/3 checkpoints):**
+
+Decisão estratégica revisada em 2026-04-26 (pós-descanso): zerar débitos HIGH antes de Customer/Order. Pattern profissional pra evitar que débito vire crise no piloto Tarumirim.
+
+Checkpoint 1 (commit 3159442) — Toggle ProductVariation individual. Resolve débito HIGH #3.
+- Novo `ProductVariationStatus(StrEnum)` com ACTIVE/INACTIVE em `app/domain/enums.py`
+- Coluna `status` em ProductVariation (`String(20)`, default ACTIVE, server_default `'active'`, CHECK dinâmico, `@validates`)
+- Migration aditiva `661195884f97` (zero downtime — coluna nullable=False com server_default popula linhas existentes)
+- Service combinou contratos: variations INACTIVE filtradas DO ARRAY + variation.is_available HERDA do Product.status (pattern "combine, não substitua" — preservou contrato CP3 catálogo)
+- Defense-in-depth ADR-010: Pydantic + @validates + CHECK constraint
+- 11 testes novos (6 model status + 5 API filtering), 481 → 492 testes
+
+Decisões deste CP1:
+- **D1 binário ACTIVE/INACTIVE** (não OUT_OF_STOCK/PAUSED como Product). Simetria não vale o custo — variation não tem visibilidade pública independente do produto pai (ADR-014 — variation reusa descrição/imagem do Product).
+- **D2 migration aditiva** com `server_default='active'`. Zero downtime, linhas pré-existentes (zero em prod local) recebem ACTIVE automaticamente.
+- **D3 BRANDA** (preservar `is_available=true` para Product com 0 variations cadastradas — estado anômalo de configuração). Backward compat com testes CP3 catálogo, reversível depois quando bootstrapping de loja for definido.
+- **D4 filtro no service** (não no repository SQL). Eager-load já traz tudo, filtragem em Python é simples e flexível. Ordem: filtro primeiro, depois ordenação.
+
+**Patterns reusáveis emergidos no CP1 HIGH:**
+- StrEnum binário ACTIVE/INACTIVE pra toggle individual em entidades dependentes
+- "Combine contratos, não substitua" quando feature nova precisa preservar contrato existente
+- Migration aditiva com `server_default` cobre rows pré-existentes sem backfill manual
+- Manual edit de migration pra adicionar `op.create_check_constraint(...)` quando autogenerate não detecta CheckConstraint em ADD COLUMN (limitação alembic)
+
+**Débitos HIGH restantes (2/3, ordem a decidir):**
+1. Expansão do modelo Store — campos description/phone/cover/logo/minimum_order/preparation_minutes + tabela store_hours
+2. Organização e ordenação do cardápio — display_order, menu_section, featured
 
 ### Arquitetura documentada
 - **25 ADRs** em `C:\Users\henri\Documents\My second mind\Projetos\ISV Delivery\11 - Decisões Técnicas (log).md`
@@ -350,27 +379,35 @@ docker exec delivery-postgres-1 psql -U isv -d isv_delivery -c "SELECT ..."
 
 ## 6. Próximo passo sugerido
 
-**Status:** Ciclo Auth COMPLETO. Decisão estratégica revisada em 2026-04-26 (pós-descanso): próximo ciclo é Débitos HIGH (zerar débito antes de features novas).
+**Status:** Ciclo Débitos HIGH em andamento (1/3 checkpoints). CP1 fechou débito #3 (Toggle ProductVariation individual) no commit 3159442.
 
-**Nova ordem dos ciclos (revisada em 2026-04-26):**
+**Ordem dos ciclos (revisada em 2026-04-26):**
 
-1. **Débitos HIGH pré-piloto** (próximo)
+1. **Débitos HIGH pré-piloto** ← em andamento, 1/3 done
 2. Customer endpoints (depois dos HIGH)
 3. Order endpoints (requer Customer, depois)
 
-Decisão anterior (2026-04-25, commit 34c8513) era Customer como próximo. Após descanso, Henrique revisou: zerar débito é prioridade antes de features novas. Pattern profissional pra evitar que débito vire crise no piloto Tarumirim.
+**Débitos HIGH — status atual:**
 
-**Próximo passo: Débitos HIGH pré-piloto**
+- [x] **#3 Toggle ProductVariation individual** — RESOLVIDO no commit 3159442 (CP1 do ciclo HIGH). StrEnum ACTIVE/INACTIVE + status column + filtro no service combinando contratos com herança CP3.
+- [ ] **#1 Expansão Store** — pendente. Campos description, phone, opening_hours (tabela separada), minimum_order_cents, cover_image_url, logo_url, average_preparation_minutes.
+- [ ] **#2 Organização do cardápio** — pendente. display_order em Product, menu_section (ADR novo: tabela vs enum), featured. Atualizar repository pra ordenação composta.
 
-3 débitos HIGH registrados no roadmap, todos pré-piloto:
+**Decisão pendente: qual débito HIGH atacar a seguir?**
 
-1. **Expansão Store** — adicionar campos: description, phone, opening_hours, minimum_order, cover_image, logo. Crítico pra apresentar app pra cliente real (loja sem horário nem foto não funciona).
+Critérios pra escolha (a ser feita pelo Henrique no próximo prompt):
 
-2. **Organização do cardápio** — display_order em Product/Category, menu_section, featured. Cardápio em ordem aleatória não é aceitável pra UX de delivery.
+| Aspecto | #1 Expansão Store | #2 Organização cardápio |
+|---|---|---|
+| Cirurgia | Aditivo simples + tabela nova (store_hours) | Aditivo simples + ADR novo (tabela vs enum) |
+| Bloqueio | Bloqueia tela de detalhe da loja no mobile | Bloqueia UX do cardápio (ordem aleatória inaceitável) |
+| Complexidade | Média (7 campos + 1 tabela 7-rows) | Média (3 campos + decisão de modelagem menu_section) |
+| Riscos | URL validation pra imagens, E.164 reuso | Migração de ordenação no repository (impacto em testes do CP3) |
+| ADR novo | Possivelmente pra horários (tabela vs JSON) | Sim, dedicado a organização |
 
-3. **Toggle ProductVariation individual** — status column + enum. Permitir desativar variação específica sem mexer no produto inteiro (ex: "carne extra" temporariamente fora de estoque).
+Recomendação informal: começar pelo #2 (organização do cardápio) porque mexe na mesma camada do CP1 que acabou de fechar (Product/ProductVariation/service de catálogo) — patterns frescos na cabeça, contexto reusado. #1 é mais "lista de campos" e pode esperar.
 
-Estimativa total: 3-5 dias com ritmo intenso. Cada débito é CRUD focado em modelo existente — patterns de schema, repository, service, endpoint todos já estabelecidos.
+Mas decisão é do Henrique. Próximo prompt deve indicar qual débito + escopo do CP1 dele.
 
 **Mobile React Native:**
 
