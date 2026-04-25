@@ -1,8 +1,8 @@
-"""Schemas Pydantic pra endpoints de Store (ADR-020, ADR-022, ADR-023)."""
+"""Schemas Pydantic pra endpoints de Store (ADR-020, ADR-022, ADR-023, ADR-026)."""
 
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
 
 class CategorySummary(BaseModel):
@@ -42,6 +42,8 @@ class StoreRead(BaseModel):
     Campos expostos:
     - id, name (=trade_name), slug: identidade pública
     - neighborhood: ajuda cliente decidir localização
+    - logo: avatar pequeno na listagem (UX iFood/Rappi). HttpUrl validado (ADR-026 dec. 6).
+    - minimum_order_cents: permite filtro/ordenação por pedido mínimo na lista (ADR-026 dec. 7).
     - category (aninhado): render direto sem N+1
     - city (aninhado): render direto sem N+1
 
@@ -50,6 +52,7 @@ class StoreRead(BaseModel):
     - tax_id, tax_id_type (PII fiscal — ADR-012)
     - street, number, complement, zip_code (endereço granular — detalhe
       vai em GET /stores/{id})
+    - description, phone, cover_image (escopo da tela de detalhe — StoreDetail)
     - status (rota filtra APPROVED, implícito)
     - delivery_fee: taxa de entrega é calculada no checkout, não atributo
       da loja
@@ -62,17 +65,18 @@ class StoreRead(BaseModel):
     name: str = Field(..., validation_alias="trade_name", examples=["Pizzaria do Zé"])
     slug: str = Field(..., examples=["pizzaria-do-ze"])
     neighborhood: str = Field(..., examples=["Centro"])
+    logo: HttpUrl | None = Field(None, examples=["https://cdn.example.com/logo.png"])
+    minimum_order_cents: int | None = Field(None, ge=0, examples=[2500])
     category: CategorySummary
     city: CitySummary
 
 
 class StoreDetail(BaseModel):
-    """Detalhe da loja (ADR-022, ADR-024). Exposto em GET /stores/{id}.
+    """Detalhe da loja (ADR-022, ADR-024, ADR-026). Exposto em GET /stores/{id}.
 
-    Expande StoreRead com endereço completo (street, number, complement, zip_code).
-    Campos de negócio (description, opening_hours, minimum_order, cover_image, phone)
-    NÃO existem no modelo Store atual — débito técnico documentado, ciclo próprio
-    antes do piloto. Por ora detalhe expande apenas endereço granular.
+    Expande StoreRead com endereço completo (street, number, complement, zip_code)
+    e campos de negócio do CP1a do HIGH #1 (ADR-026): description, phone,
+    minimum_order_cents, cover_image, logo. opening_hours fica pro CP1b.
 
     Continua NÃO expondo:
     - legal_name (razão social — fiscal)
@@ -82,6 +86,8 @@ class StoreDetail(BaseModel):
     - created_at, updated_at, deleted_at (timestamps internos)
 
     zip_code retornado crú (8 dígitos sem hífen) — frontend formata.
+    phone retornado em E.164 (validado por @validates no model + validate_phone_e164).
+    cover_image / logo: HttpUrl validados (ADR-026 dec. 6).
     """
 
     model_config = ConfigDict(from_attributes=True)
@@ -89,6 +95,15 @@ class StoreDetail(BaseModel):
     id: UUID
     name: str = Field(..., validation_alias="trade_name", examples=["Pizzaria do Zé"])
     slug: str = Field(..., examples=["pizzaria-do-ze"])
+    description: str | None = Field(
+        None,
+        max_length=2000,
+        examples=["A melhor pizza de Tarumirim, massa fina e fermentação natural."],
+    )
+    phone: str = Field(..., examples=["+5531999887766"], description="Telefone E.164")
+    minimum_order_cents: int | None = Field(None, ge=0, examples=[2500])
+    cover_image: HttpUrl | None = Field(None, examples=["https://cdn.example.com/cover.jpg"])
+    logo: HttpUrl | None = Field(None, examples=["https://cdn.example.com/logo.png"])
     street: str = Field(..., examples=["Rua das Flores"])
     number: str = Field(..., examples=["123"])
     complement: str | None = Field(None, examples=["Loja 2"])

@@ -1,8 +1,9 @@
 """Lógica de negócio do cardápio (ADR-020 layer: service, ADR-024)."""
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 from uuid import UUID
 
+from pydantic import HttpUrl
 from sqlalchemy.orm import Session
 
 from app.domain.enums import ProductStatus, ProductVariationStatus
@@ -100,7 +101,9 @@ def _build_product_read(product: "Product") -> ProductRead:
         id=product.id,
         name=product.name,
         description=product.description,
-        image_url=product.image_url,
+        # cast: Pydantic coerce str -> HttpUrl em runtime (ADR-026 dec. 6).
+        # mypy precisa do hint estático porque init_typed=True (pydantic.mypy).
+        image_url=cast("HttpUrl | None", product.image_url),
         preparation_minutes=product.preparation_minutes,
         is_available=is_product_available,
         display_order=product.display_order,

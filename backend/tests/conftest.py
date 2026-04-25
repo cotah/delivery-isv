@@ -296,6 +296,8 @@ def store_factory(
             "status": StoreStatus.APPROVED,
             "city_id": city.id,
             "category_id": category.id,
+            # phone NOT NULL adicionado em ADR-026 CP1a HIGH #1.
+            "phone": generate_valid_phone_e164(),
         }
         defaults.update(overrides)
         store = Store(**defaults)

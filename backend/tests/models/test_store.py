@@ -180,7 +180,9 @@ class TestStoreBehavior:
         assert store.tax_id == VALID_CNPJ
 
     def test_repr_masks_tax_id(self) -> None:
-        store = Store(**_valid_store_kwargs(tax_id=VALID_CPF, tax_id_type="cpf"))
+        store = Store(
+            **_valid_store_kwargs(tax_id=VALID_CPF, tax_id_type="cpf", phone="+5531999887766")
+        )
         r = repr(store)
         # Não expõe tax_id completo
         assert VALID_CPF not in r
@@ -188,3 +190,112 @@ class TestStoreBehavior:
         assert "marmitaria-da-maria" in r
         # Mascara aplicada (formato CPF mascarado)
         assert "529.***.***-25" in r
+
+
+VALID_PHONE = "+5531999887766"
+
+
+class TestStoreExtensionFields:
+    """Campos adicionados no CP1a do Ciclo Débitos HIGH #1 (ADR-026, 2026-04-26)."""
+
+    def test_description_is_text_nullable(self) -> None:
+        cols = Store.__table__.columns
+        assert "description" in cols
+        assert cols["description"].nullable is True
+        # Type Text (sem cap no DB — validação max_length=2000 fica no schema Pydantic).
+        assert str(cols["description"].type).upper() == "TEXT"
+
+    def test_description_default_none_when_not_set(self) -> None:
+        store = Store(**_valid_store_kwargs(phone=VALID_PHONE))
+        assert store.description is None
+
+    def test_description_accepts_long_text(self) -> None:
+        long_text = "A" * 1500
+        store = Store(**_valid_store_kwargs(phone=VALID_PHONE, description=long_text))
+        assert store.description == long_text
+
+    def test_phone_is_string_20_not_null(self) -> None:
+        cols = Store.__table__.columns
+        assert "phone" in cols
+        assert cols["phone"].nullable is False
+        assert str(cols["phone"].type) == "VARCHAR(20)"
+
+    def test_phone_validates_e164_via_validates(self) -> None:
+        # Sem +, sem código país — rejeita.
+        with pytest.raises(ValueError, match=r"E\.164"):
+            Store(**_valid_store_kwargs(phone="11999887766"))
+
+    def test_phone_rejects_letters(self) -> None:
+        with pytest.raises(ValueError, match=r"E\.164"):
+            Store(**_valid_store_kwargs(phone="+ABCDEFGHIJK"))
+
+    def test_phone_accepts_valid_e164_brazilian(self) -> None:
+        store = Store(**_valid_store_kwargs(phone="+5531999887766"))
+        assert store.phone == "+5531999887766"
+
+    def test_phone_accepts_valid_e164_international(self) -> None:
+        # Pattern E.164 aceita qualquer país (não-BR).
+        store = Store(**_valid_store_kwargs(phone="+14155552671"))
+        assert store.phone == "+14155552671"
+
+    def test_minimum_order_cents_is_integer_nullable(self) -> None:
+        cols = Store.__table__.columns
+        assert "minimum_order_cents" in cols
+        assert cols["minimum_order_cents"].nullable is True
+        assert "INTEGER" in str(cols["minimum_order_cents"].type).upper()
+
+    def test_minimum_order_cents_default_none(self) -> None:
+        store = Store(**_valid_store_kwargs(phone=VALID_PHONE))
+        assert store.minimum_order_cents is None
+
+    def test_minimum_order_cents_zero_accepted(self) -> None:
+        store = Store(**_valid_store_kwargs(phone=VALID_PHONE, minimum_order_cents=0))
+        assert store.minimum_order_cents == 0
+
+    def test_minimum_order_cents_positive_accepted(self) -> None:
+        store = Store(**_valid_store_kwargs(phone=VALID_PHONE, minimum_order_cents=2500))
+        assert store.minimum_order_cents == 2500
+
+    def test_has_check_constraint_minimum_order_cents_non_negative(self) -> None:
+        table = Store.__table__
+        assert isinstance(table, Table)
+        checks = [c for c in table.constraints if isinstance(c, CheckConstraint)]
+        check = next(
+            (c for c in checks if c.name == "ck_stores_minimum_order_cents_non_negative"),
+            None,
+        )
+        assert check is not None, "ck_stores_minimum_order_cents_non_negative not found"
+        sql_text = str(check.sqltext)
+        # NULL-safe + non-negative.
+        assert "minimum_order_cents" in sql_text
+        assert "IS NULL" in sql_text
+        assert ">= 0" in sql_text
+
+    def test_cover_image_is_string_500_nullable(self) -> None:
+        cols = Store.__table__.columns
+        assert "cover_image" in cols
+        assert cols["cover_image"].nullable is True
+        assert str(cols["cover_image"].type) == "VARCHAR(500)"
+
+    def test_cover_image_default_none(self) -> None:
+        store = Store(**_valid_store_kwargs(phone=VALID_PHONE))
+        assert store.cover_image is None
+
+    def test_logo_is_string_500_nullable(self) -> None:
+        cols = Store.__table__.columns
+        assert "logo" in cols
+        assert cols["logo"].nullable is True
+        assert str(cols["logo"].type) == "VARCHAR(500)"
+
+    def test_logo_default_none(self) -> None:
+        store = Store(**_valid_store_kwargs(phone=VALID_PHONE))
+        assert store.logo is None
+
+    def test_repr_masks_phone_proactive_lgpd(self) -> None:
+        """ADR-026 dec. 8 — Store antecipa débito LGPD do User."""
+        store = Store(**_valid_store_kwargs(phone="+5531999887766"))
+        r = repr(store)
+        # Não expõe phone cru
+        assert "+5531999887766" not in r
+        # Aplica máscara mask_phone_for_log: formato +55*********66
+        assert "+55*********66" in r

@@ -6,7 +6,9 @@ from sqlalchemy import (
     CheckConstraint,
     ForeignKey,
     Index,
+    Integer,
     String,
+    Text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
@@ -14,7 +16,12 @@ from app.db.base import Base
 from app.db.mixins import SoftDeleteMixin, TimestampMixin
 from app.db.types import UUIDPK
 from app.domain.enums import StoreStatus, TaxIdType
-from app.utils.validators import mask_tax_id_for_log, validate_tax_id
+from app.utils.validators import (
+    mask_phone_for_log,
+    mask_tax_id_for_log,
+    validate_phone_e164,
+    validate_tax_id,
+)
 
 if TYPE_CHECKING:
     from app.models.category import Category
@@ -92,13 +99,30 @@ class Store(Base, TimestampMixin, SoftDeleteMixin):
     neighborhood: Mapped[str] = mapped_column(String(100), nullable=False)
     zip_code: Mapped[str] = mapped_column(String(8), nullable=False)
 
+    # Expansão pré-piloto (ADR-026, HIGH debt #1, CP1a 2026-04-26).
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    phone: Mapped[str] = mapped_column(String(20), nullable=False)
+    minimum_order_cents: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    cover_image: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    logo: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
     __table_args__ = (
         CheckConstraint(_STATUS_CHECK, name="status"),
         CheckConstraint(_TAX_ID_TYPE_CHECK, name="tax_id_type"),
+        # NULL-safe: minimum_order é opcional. Pattern price_cents (ADR-007).
+        CheckConstraint(
+            "minimum_order_cents IS NULL OR minimum_order_cents >= 0",
+            name="minimum_order_cents_non_negative",
+        ),
         Index("ix_stores_category_id", "category_id"),
         Index("ix_stores_city_id", "city_id"),
         Index("ix_stores_status", "status"),
     )
+
+    @validates("phone")
+    def _validate_phone(self, _key: str, value: str) -> str:
+        """Defense-in-depth (ADR-010, ADR-026 dec. 5) — rejeita phone fora E.164."""
+        return validate_phone_e164(value)
 
     @validates("tax_id", "tax_id_type")
     def _validate_tax_id_fields(self, key: str, value: str) -> str:
@@ -126,7 +150,10 @@ class Store(Base, TimestampMixin, SoftDeleteMixin):
         return value
 
     def __repr__(self) -> str:
+        # phone mascarado proativamente (ADR-026 dec. 8 — antecipa débito LGPD).
+        phone = getattr(self, "phone", None)
         return (
             f"<Store id={self.id} slug={self.slug} "
-            f"tax_id={mask_tax_id_for_log(self.tax_id, str(self.tax_id_type))}>"
+            f"tax_id={mask_tax_id_for_log(self.tax_id, str(self.tax_id_type))} "
+            f"phone={mask_phone_for_log(phone)}>"
         )

@@ -7,7 +7,7 @@ não exposto cru)."""
 
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
 from app.domain.enums import MenuSection
 
@@ -88,7 +88,9 @@ class ProductRead(BaseModel):
     id: UUID
     name: str = Field(..., examples=["Pizza Margherita"])
     description: str | None = Field(None)
-    image_url: str | None = Field(None)
+    # image_url validado como HttpUrl (ADR-026 dec. 6) — pattern do projeto
+    # pra todos campos URL. Banco armazena str (Mapped[str | None] no model).
+    image_url: HttpUrl | None = Field(None, examples=["https://cdn.example.com/pizza.jpg"])
     preparation_minutes: int | None = Field(None, ge=0, examples=[30])
     is_available: bool = Field(..., examples=[True])
     display_order: int = Field(..., ge=0, examples=[1])

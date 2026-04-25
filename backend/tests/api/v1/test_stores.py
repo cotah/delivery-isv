@@ -43,8 +43,18 @@ class TestGetStoresEndpoint:
         response = client.get("/api/v1/stores")
         item = response.json()["items"][0]
 
-        # Campos top-level (sem delivery_fee_cents — não existe em Store)
-        assert set(item.keys()) == {"id", "name", "slug", "neighborhood", "category", "city"}
+        # Campos top-level. logo + minimum_order_cents adicionados em CP1a HIGH #1
+        # (ADR-026): UX iFood/Rappi mostra avatar + pedido mínimo na lista.
+        assert set(item.keys()) == {
+            "id",
+            "name",
+            "slug",
+            "neighborhood",
+            "logo",
+            "minimum_order_cents",
+            "category",
+            "city",
+        }
 
         # Embed de category (display_order adicionado em HIGH debt #2, 2026-04-26)
         assert set(item["category"].keys()) == {"id", "name", "slug", "display_order"}
@@ -194,10 +204,17 @@ class TestGetStoreDetailEndpoint:
         store = store_factory(status=StoreStatus.APPROVED)
         response = client.get(f"/api/v1/stores/{store.id}")
         body = response.json()
+        # 5 campos novos em CP1a HIGH #1 (ADR-026): description, phone,
+        # minimum_order_cents, cover_image, logo.
         expected = {
             "id",
             "name",
             "slug",
+            "description",
+            "phone",
+            "minimum_order_cents",
+            "cover_image",
+            "logo",
             "street",
             "number",
             "complement",
@@ -271,3 +288,113 @@ class TestGetStoreDetailEndpoint:
         assert zip_code == "35855000"
         assert "-" not in zip_code
         assert len(zip_code) == 8
+
+
+class TestStoreExtensionResponseShape:
+    """Campos novos do CP1a HIGH #1 expostos via API (ADR-026, 2026-04-26)."""
+
+    def test_summary_includes_logo_and_minimum_order(
+        self,
+        client: TestClient,
+        store_factory: Any,
+    ) -> None:
+        """StoreRead expõe logo e minimum_order_cents pra UX de listagem."""
+        store_factory(
+            status=StoreStatus.APPROVED,
+            logo="https://cdn.example.com/logo.png",
+            minimum_order_cents=2500,
+        )
+        response = client.get("/api/v1/stores")
+        item = response.json()["items"][0]
+        # HttpUrl serializa como str (com possível trailing slash do Pydantic).
+        assert item["logo"].startswith("https://cdn.example.com/logo.png")
+        assert item["minimum_order_cents"] == 2500
+
+    def test_summary_returns_null_for_optional_when_unset(
+        self,
+        client: TestClient,
+        store_factory: Any,
+    ) -> None:
+        """Loja sem logo/minimum cadastrados retorna null nos campos opcionais."""
+        store_factory(status=StoreStatus.APPROVED, logo=None, minimum_order_cents=None)
+        response = client.get("/api/v1/stores")
+        item = response.json()["items"][0]
+        assert item["logo"] is None
+        assert item["minimum_order_cents"] is None
+
+    def test_detail_includes_all_extension_fields(
+        self,
+        client: TestClient,
+        store_factory: Any,
+    ) -> None:
+        """StoreDetail expõe os 5 novos campos com valores corretos."""
+        store = store_factory(
+            status=StoreStatus.APPROVED,
+            description="Pizza artesanal de Tarumirim",
+            phone="+5531999887766",
+            minimum_order_cents=3000,
+            cover_image="https://cdn.example.com/cover.jpg",
+            logo="https://cdn.example.com/logo.png",
+        )
+        response = client.get(f"/api/v1/stores/{store.id}")
+        body = response.json()
+        assert body["description"] == "Pizza artesanal de Tarumirim"
+        assert body["phone"] == "+5531999887766"
+        assert body["minimum_order_cents"] == 3000
+        assert body["cover_image"].startswith("https://cdn.example.com/cover.jpg")
+        assert body["logo"].startswith("https://cdn.example.com/logo.png")
+
+    def test_detail_phone_in_e164_format(
+        self,
+        client: TestClient,
+        store_factory: Any,
+    ) -> None:
+        """Phone retornado como string E.164 (não mascarado na API pública)."""
+        store = store_factory(status=StoreStatus.APPROVED, phone="+5531999887766")
+        response = client.get(f"/api/v1/stores/{store.id}")
+        phone = response.json()["phone"]
+        assert phone.startswith("+")
+        assert phone == "+5531999887766"
+
+    def test_detail_returns_null_for_optional_extension_fields(
+        self,
+        client: TestClient,
+        store_factory: Any,
+    ) -> None:
+        """description/minimum_order/cover_image/logo retornam null quando unset."""
+        store = store_factory(
+            status=StoreStatus.APPROVED,
+            description=None,
+            minimum_order_cents=None,
+            cover_image=None,
+            logo=None,
+        )
+        response = client.get(f"/api/v1/stores/{store.id}")
+        body = response.json()
+        assert body["description"] is None
+        assert body["minimum_order_cents"] is None
+        assert body["cover_image"] is None
+        assert body["logo"] is None
+
+    def test_detail_does_not_expose_pii_after_extension(
+        self,
+        client: TestClient,
+        store_factory: Any,
+    ) -> None:
+        """Regressão: novos campos não introduzem vazamento de PII fiscal/interna."""
+        store = store_factory(status=StoreStatus.APPROVED, phone="+5531999887766")
+        response = client.get(f"/api/v1/stores/{store.id}")
+        keys = set(response.json().keys())
+        forbidden = {
+            "legal_name",
+            "tax_id",
+            "tax_id_type",
+            "status",
+            "is_active",
+            "deleted_at",
+            "created_at",
+            "updated_at",
+            "trade_name",
+        }
+        leaked = keys & forbidden
+        assert not leaked, f"PII/internal fields leaked: {leaked}"

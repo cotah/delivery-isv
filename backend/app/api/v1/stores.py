@@ -21,7 +21,11 @@ router = APIRouter(prefix="/stores", tags=["stores"])
     response_model=StoreListResponse,
     summary="Listar lojas aprovadas",
     description=(
-        "Retorna lojas com status=APPROVED, paginadas. Endpoint público — não exige autenticação."
+        "Retorna lojas com status=APPROVED, paginadas. "
+        "Cada item expõe identidade pública + logo + minimum_order_cents pra UX "
+        "de listagem (ADR-026). Detalhes completos (description, phone, "
+        "cover_image, endereço granular) ficam em GET /stores/{id}. "
+        "Endpoint público — não exige autenticação."
     ),
 )
 def list_stores(
@@ -40,7 +44,10 @@ def list_stores(
     response_model=StoreDetail,
     summary="Detalhe de uma loja",
     description=(
-        "Retorna detalhe completo de uma loja aprovada. "
+        "Retorna detalhe completo de uma loja aprovada — identidade pública, "
+        "endereço granular, descrição, telefone E.164, pedido mínimo, "
+        "cover_image, logo (ADR-026 dec. 6: HttpUrl validado). opening_hours "
+        "fica pro CP1b do HIGH #1. "
         "Retorna 404 se loja não existe, não está aprovada ou foi removida. "
         "Retorna 422 se store_id não for UUID válido. "
         "Endpoint público — não exige autenticação."
