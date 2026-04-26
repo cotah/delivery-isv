@@ -1,0 +1,22 @@
+# ISV Delivery — Gitleaks config
+# Decisao: ADR-028 (estrategia de secrets, abril 2026)
+# Procedimento: docs/SECRETS.md secao 11
+
+title = "ISV Delivery — Gitleaks config"
+
+[extend]
+# Use built-in default rules (cobre AWS, GCP, GitHub, JWT, generic API keys)
+useDefault = true
+
+[allowlist]
+description = "Allowlist for known false positives"
+# Arquivos onde patterns "secret-like" sao esperados (templates, docs)
+# Cada entry exige justificativa em comentario neste arquivo.
+paths = [
+    # Template de variaveis — placeholders intencionais (replace-with-...)
+    '''\.env\.example''',
+    # Documentacao operacional — referencia nomes de secrets sem valores
+    '''docs/SECRETS\.md''',
+    # Este proprio arquivo — exemplos de patterns
+    '''\.gitleaks\.toml''',
+]
