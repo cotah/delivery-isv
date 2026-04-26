@@ -130,3 +130,31 @@ async def validation_exception_handler(
         message="Falha na validação dos dados enviados",
         details=details,
     )
+
+
+async def value_error_handler(request: Request, exc: ValueError) -> JSONResponse:
+    """Captura ValueError de @validates do SQLAlchemy (assignment).
+
+    `@validates` roda em assignment direto (`Customer(cpf="abc")`) e sobe
+    `ValueError` puro, NÃO `StatementError` (que seria envelope só pra
+    erros no flush, ex: CHECK constraint do DB violado).
+
+    Sem este handler, FastAPI default vira 500 — UX errada (payload
+    inválido é 422, não bug do servidor). Cliente recebe mensagem opaca
+    e abre ticket de suporte.
+
+    Trade-off: bug genuíno raise `ValueError` programático também vira
+    422. Mas mensagem do error fica no body — debug viável. No projeto
+    atual, dos 16 raises de ValueError, 15 são validation (todos viram
+    422 com mensagem útil); 1 é guard de programador inalcançável via
+    API real (`is_store_open` naive datetime).
+
+    Pattern descoberto durante mini-CP fix pós-Customer cycle (2026-04-26)
+    via reprodução empírica — confirmado que ValueError sobe puro do
+    construtor, não envelopado.
+    """
+    return _build_response(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        code=ErrorCode.VALIDATION_FAILED.value,
+        message=str(exc),
+    )

@@ -3,7 +3,7 @@
 from datetime import date, datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 
 class CustomerRead(BaseModel):
@@ -65,11 +65,11 @@ class CustomerCreate(BaseModel):
         examples=["João da Silva"],
         description="Nome do cliente. Único campo obrigatório no cadastro.",
     )
-    email: str | None = Field(
+    email: EmailStr | None = Field(
         None,
         max_length=254,
         examples=["joao@example.com"],
-        description="Email opcional, max 254 chars (RFC 5321).",
+        description="Email opcional, validado via EmailStr (RFC 5321 + formato).",
     )
     cpf: str | None = Field(
         None,
@@ -106,11 +106,11 @@ class CustomerUpdate(BaseModel):
         max_length=150,
         examples=["João da Silva Santos"],
     )
-    email: str | None = Field(
+    email: EmailStr | None = Field(
         None,
         max_length=254,
         examples=["novo-email@example.com"],
-        description="Enviar null limpa o email cadastrado. Max 254 chars (RFC 5321).",
+        description="Enviar null limpa o email. Validado via EmailStr (RFC 5321 + formato).",
     )
     cpf: str | None = Field(
         None,

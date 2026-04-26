@@ -197,6 +197,55 @@ class TestCreateMyCustomer:
         assert response.status_code == 401
         assert response.json()["error"]["code"] == "unauthenticated"
 
+    def test_post_invalid_cpf_format_returns_422(
+        self,
+        authenticated_client: TestClient,
+        authenticated_user: Any,
+    ) -> None:
+        """ValueError handler global (mini-CP fix): @validates raise ValueError → 422.
+
+        validate_cpf raise ValueError no assignment do construtor (não no flush).
+        Sem handler global, FastAPI retorna 500. Com handler, vira 422 útil.
+        """
+        response = authenticated_client.post(
+            "/api/v1/customers",
+            json={"name": "João", "cpf": "abc"},  # formato inválido
+        )
+        assert response.status_code == 422
+        body = response.json()
+        assert body["error"]["code"] == "validation_failed"
+        assert "11 digits" in body["error"]["message"]
+
+    def test_post_invalid_cpf_checksum_returns_422(
+        self,
+        authenticated_client: TestClient,
+        authenticated_user: Any,
+    ) -> None:
+        """CPF com 11 dígitos mas dígito verificador errado → 422 via handler."""
+        response = authenticated_client.post(
+            "/api/v1/customers",
+            json={"name": "João", "cpf": "00000000000"},  # 11 dígitos iguais
+        )
+        assert response.status_code == 422
+        assert response.json()["error"]["code"] == "validation_failed"
+
+    def test_post_invalid_email_format_returns_422(
+        self,
+        authenticated_client: TestClient,
+        authenticated_user: Any,
+    ) -> None:
+        """EmailStr (mini-CP fix): Pydantic valida formato de email.
+
+        Sem EmailStr, "abc" passava silenciosamente como email (str).
+        Com EmailStr, Pydantic raise → vira RequestValidationError → 422.
+        """
+        response = authenticated_client.post(
+            "/api/v1/customers",
+            json={"name": "João", "email": "abc"},
+        )
+        assert response.status_code == 422
+        assert response.json()["error"]["code"] == "validation_failed"
+
 
 # === PATCH /api/v1/customers/me ===
 
@@ -313,6 +362,38 @@ class TestUpdateMyCustomer:
         )
 
         assert response.status_code == 401
+
+    def test_patch_invalid_cpf_returns_422(
+        self,
+        authenticated_client: TestClient,
+        authenticated_user: Any,
+        customer_factory: Any,
+    ) -> None:
+        """ValueError handler global em PATCH: setattr cpf="abc" raise → 422."""
+        customer_factory(user=authenticated_user)
+        response = authenticated_client.patch(
+            "/api/v1/customers/me",
+            json={"cpf": "abc"},
+        )
+        assert response.status_code == 422
+        body = response.json()
+        assert body["error"]["code"] == "validation_failed"
+        assert "11 digits" in body["error"]["message"]
+
+    def test_patch_invalid_email_returns_422(
+        self,
+        authenticated_client: TestClient,
+        authenticated_user: Any,
+        customer_factory: Any,
+    ) -> None:
+        """EmailStr no PATCH (simetria com POST)."""
+        customer_factory(user=authenticated_user)
+        response = authenticated_client.patch(
+            "/api/v1/customers/me",
+            json={"email": "abc"},
+        )
+        assert response.status_code == 422
+        assert response.json()["error"]["code"] == "validation_failed"
 
 
 # === Conflict edge case: 2 Users diferentes podem cadastrar Customer cada um ===

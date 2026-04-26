@@ -7,7 +7,11 @@ from slowapi.errors import RateLimitExceeded
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app import __version__
-from app.api.errors import http_exception_handler, validation_exception_handler
+from app.api.errors import (
+    http_exception_handler,
+    validation_exception_handler,
+    value_error_handler,
+)
 from app.api.health import router as health_router
 from app.api.v1.router import router as api_v1_router
 from app.core.rate_limit import limiter, rate_limit_exceeded_handler
@@ -40,6 +44,11 @@ app.add_middleware(
 app.add_exception_handler(StarletteHTTPException, cast(Any, http_exception_handler))
 app.add_exception_handler(RequestValidationError, cast(Any, validation_exception_handler))
 app.add_exception_handler(RateLimitExceeded, cast(Any, rate_limit_exceeded_handler))
+# ValueError handler (mini-CP fix pós-Customer cycle, 2026-04-26):
+# captura ValueError raised por @validates do SQLAlchemy (assignment),
+# que de outro modo viraria 500 default do FastAPI. UX correta: 422
+# validation_failed com message do error. Ver docstring em errors.py.
+app.add_exception_handler(ValueError, cast(Any, value_error_handler))
 
 app.include_router(health_router)
 app.include_router(api_v1_router)
