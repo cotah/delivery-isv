@@ -84,8 +84,16 @@ class TestUser:
         self,
         user_factory: Any,
     ) -> None:
+        """LGPD: phone mascarado em logs (pattern Customer/Store).
+
+        Resolvido como débito LOW pré-piloto (antes phone cru, agora
+        mask_phone_for_log aplicado — formato +55*********55).
+        """
         user = user_factory(phone="+5531988776655")
         text = repr(user)
 
         assert str(user.id) in text
-        assert "+5531988776655" in text
+        # Phone cru NÃO deve aparecer (LGPD)
+        assert "+5531988776655" not in text
+        # Mascara mask_phone_for_log: +55 + asteriscos + últimos 2 dígitos
+        assert "+55*********55" in text

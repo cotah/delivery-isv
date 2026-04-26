@@ -6,7 +6,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 from app.db.base import Base
 from app.db.mixins import TimestampMixin
 from app.db.types import UUIDPK
-from app.utils.validators import validate_phone_e164
+from app.utils.validators import mask_phone_for_log, validate_phone_e164
 
 if TYPE_CHECKING:
     from app.models.customer import Customer
@@ -59,4 +59,6 @@ class User(Base, TimestampMixin):
         return validate_phone_e164(value)
 
     def __repr__(self) -> str:
-        return f"<User id={self.id} phone={self.phone}>"
+        # phone mascarado pra LGPD compliance (pattern Customer/Store).
+        # Resolvido como débito LOW pré-piloto (antes era phone cru).
+        return f"<User id={self.id} phone={mask_phone_for_log(self.phone)}>"
