@@ -1,10 +1,16 @@
 """Rate limiting via slowapi + Redis (ADR-025 decisão 8).
 
-CP3c implementa SOMENTE rate limit por IP (`get_remote_address`).
-Settings declaram limites por phone (`RATE_LIMIT_*_PHONE`) mas eles
-NÃO são aplicados nos decorators ainda — slowapi `key_func` é síncrono
-e extrair phone do body exige body parsing assíncrono. Pattern previsto
-em débito MEDIUM "Rate limit phone-based em endpoints Auth".
+Defesa em duas camadas:
+
+1. **Por IP** (decorator `@limiter.limit(...)`): slowapi nativo,
+   `key_func=get_remote_address`. Roda ANTES do body do endpoint.
+   Anti-scrape (multi-phone vindo do mesmo IP).
+
+2. **Por phone** (helper `check_phone_rate_limit(...)`): chamado
+   manualmente no endpoint APÓS Pydantic parsear+validar o payload
+   (phone garantido em E.164 canônico). Anti-targeted-abuse (mesmo
+   phone vindo de múltiplos IPs). Slowapi `key_func` é síncrono e
+   sem acesso ao body — manual hit é a única opção viável.
 
 Fail-open quando Redis indisponível, em duas dimensões:
 
@@ -28,9 +34,11 @@ import logging
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
+from limits import parse
 from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
+from slowapi.wrappers import Limit
 
 from app.api.errors import ErrorCode
 from app.core.config import get_settings
@@ -107,3 +115,77 @@ async def rate_limit_exceeded_handler(
         },
         headers={"Retry-After": str(retry_after_seconds)},
     )
+
+
+def _make_phone_limit(limit_str: str) -> Limit:
+    """Wrapper minimal pra `slowapi.wrappers.Limit` (ctor exige 9 args).
+
+    Usado APENAS pra raise `RateLimitExceeded(limit)` — handler
+    `rate_limit_exceeded_handler` lê `exc.detail` mas ignora pra usar
+    formato canônico do projeto. key_func/scope/exempt_when/etc não
+    são consultados nesse path.
+    """
+    return Limit(
+        limit=parse(limit_str),
+        key_func=lambda: "phone",
+        scope=None,
+        per_method=False,
+        methods=None,
+        error_message=None,
+        exempt_when=None,
+        cost=1,
+        override_defaults=False,
+    )
+
+
+def check_phone_rate_limit(*, scope: str, phone: str, limit_str: str) -> None:
+    """Aplica rate limit por phone como SEGUNDA camada, após decorator IP.
+
+    Defesa em camadas (ADR-022 + CP3c Auth D2):
+    1. `@limiter.limit(IP)` — anti-scrape, roda ANTES (decorator slowapi).
+    2. `check_phone_rate_limit(phone)` — anti-targeted-abuse (esta função).
+
+    Phone DEVE chegar normalizado E.164 (formato canônico só com digits
+    e leading `+`). `validate_phone_e164` (chamado por Pydantic
+    `field_validator` em `app/schemas/auth.py`) garante isso na borda —
+    variantes com whitespace/dashes recebem 422 antes deste helper rodar.
+
+    Fail-open replicado manualmente: slowapi flag `swallow_errors=True`
+    aplica APENAS ao `_check_request_limit` interno (chamado pelos
+    decorators `@limiter.limit`). Chamada manual a `limiter.limiter.hit()`
+    bypassa essa lógica — sem este try/except, queda do Redis viraria
+    500 nos endpoints Auth, regredindo o ganho do MEDIUM #3 (resolvido
+    em 2026-04-26 via swallow_errors+in_memory_fallback).
+
+    Args:
+        scope: namespace do endpoint (ex: "request-otp", "verify-otp").
+            Separa contadores entre endpoints — mesmo phone com OTPs
+            diferentes não bate limites cruzados.
+        phone: telefone E.164 canônico (validate_phone_e164 garante).
+        limit_str: limite no formato slowapi/limits (ex: "3/hour").
+
+    Raises:
+        RateLimitExceeded: phone excedeu o limit. Handler customizado
+            (`rate_limit_exceeded_handler`) traduz pra 429 ADR-022.
+    """
+    if not limiter.enabled:
+        return
+
+    phone_limit = _make_phone_limit(limit_str)
+    # Identifiers: namespace por scope evita colisão entre endpoints.
+    # Resultado Redis key: LIMITS/phone:request-otp/+5531999887766/<window>
+    identifiers = (f"phone:{scope}", phone)
+
+    try:
+        if not limiter.limiter.hit(phone_limit.limit, *identifiers, cost=1):
+            raise RateLimitExceeded(phone_limit)
+    except RateLimitExceeded:
+        raise
+    except Exception as exc:
+        # Fail-open: igual ao MEDIUM #3 (CP3c Auth D2). swallow_errors
+        # do slowapi NÃO cobre hit manual — replicar pattern aqui.
+        logger.warning(
+            "phone_rate_limit.storage_unreachable scope=%s error=%s",
+            scope,
+            str(exc),
+        )

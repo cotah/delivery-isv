@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_db_session, get_sms_provider
 from app.api.errors import ErrorCode, ErrorResponse
 from app.core.config import get_settings
-from app.core.rate_limit import limiter
+from app.core.rate_limit import check_phone_rate_limit, limiter
 from app.schemas.auth import (
     RequestOtpRequest,
     RequestOtpResponse,
@@ -36,7 +36,9 @@ router = APIRouter(prefix="/auth", tags=["auth"])
         "Envia código OTP de 6 dígitos por SMS para o telefone informado. "
         "Invalida qualquer código anterior ainda ativo. Código expira em 10 minutos. "
         "Endpoint público — autenticação não é necessária. "
-        "Rate limit por IP via slowapi+Redis (ADR-025 decisão 8). "
+        "Rate limit em duas camadas (ADR-025 decisão 8 + CP3c Auth D2): "
+        "IP via slowapi (anti-scrape) + phone via helper (anti-targeted-abuse). "
+        "Ambos precisam passar; ordem: IP (decorator) → phone (após Pydantic). "
         "Se o provider SMS falhar, retorna 502 e nenhum código fica ativo."
     ),
     responses={
@@ -52,6 +54,14 @@ def request_otp_endpoint(
     session: Annotated[Session, Depends(get_db_session)],
     sms_provider: Annotated[SMSProvider, Depends(get_sms_provider)],
 ) -> RequestOtpResponse:
+    # Defesa em camadas: IP (decorator acima) + phone (helper abaixo).
+    # payload.phone já normalizado E.164 pelo Pydantic field_validator.
+    check_phone_rate_limit(
+        scope="request-otp",
+        phone=payload.phone,
+        limit_str=get_settings().RATE_LIMIT_REQUEST_OTP_PHONE,
+    )
+
     try:
         masked_phone = request_otp(
             session=session,
@@ -83,7 +93,8 @@ def request_otp_endpoint(
         "Se válido: cria User (primeira vez) ou recupera existente, retorna JWT. "
         "Código expira após 3 tentativas erradas (anti brute force). "
         "Resposta 400 genérica para qualquer falha (anti-enumeração, ADR-025). "
-        "Rate limit por IP via slowapi+Redis (ADR-025 decisão 8)."
+        "Rate limit em duas camadas (ADR-025 decisão 8 + CP3c Auth D2): "
+        "IP via slowapi (anti-scrape) + phone via helper (anti-targeted-abuse)."
     ),
     responses={
         400: {
@@ -100,6 +111,14 @@ def verify_otp_endpoint(
     payload: VerifyOtpRequest,
     session: Annotated[Session, Depends(get_db_session)],
 ) -> VerifyOtpResponse:
+    # Defesa em camadas: IP (decorator acima) + phone (helper abaixo).
+    # payload.phone já normalizado E.164 pelo Pydantic field_validator.
+    check_phone_rate_limit(
+        scope="verify-otp",
+        phone=payload.phone,
+        limit_str=get_settings().RATE_LIMIT_VERIFY_OTP_PHONE,
+    )
+
     try:
         _user, access_token = verify_otp(
             session=session,

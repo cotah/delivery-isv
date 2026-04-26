@@ -450,3 +450,81 @@ class TestRateLimit:
         )
         assert r.status_code == 429
         assert "retry-after" in {k.lower() for k in r.headers}
+
+
+class TestPhoneRateLimit:
+    """Defesa em camadas: IP (decorator slowapi) + phone (helper).
+
+    Ambos os endpoints Auth aplicam ambas as camadas. Phone limit é
+    mais apertado que IP limit (request-otp 3 vs 10; verify-otp 10
+    vs 30) → mesmo phone repetido bate phone-limit antes do IP-limit.
+
+    Pattern análogo a TestRateLimit (acima) — fixture autouse
+    `_reset_rate_limiter` zera contadores entre testes.
+    """
+
+    def test_request_otp_rate_limited_by_phone_after_3(
+        self,
+        client: TestClient,
+    ) -> None:
+        """4º request com mesmo phone em <1h retorna 429 (phone limit 3/h)."""
+        phone = "+5531999887766"
+
+        for _ in range(3):
+            r = client.post("/api/v1/auth/request-otp", json={"phone": phone})
+            assert r.status_code != 429
+
+        r4 = client.post("/api/v1/auth/request-otp", json={"phone": phone})
+        assert r4.status_code == 429
+        body = r4.json()
+        assert body["error"]["code"] == "rate_limited"
+
+    def test_verify_otp_rate_limited_by_phone_after_10(
+        self,
+        client: TestClient,
+    ) -> None:
+        """11º verify com mesmo phone em <1h retorna 429 (phone limit 10/h)."""
+        phone = "+5531999887766"
+
+        for _ in range(10):
+            r = client.post(
+                "/api/v1/auth/verify-otp",
+                json={"phone": phone, "code": "000000"},
+            )
+            assert r.status_code != 429
+
+        r11 = client.post(
+            "/api/v1/auth/verify-otp",
+            json={"phone": phone, "code": "000000"},
+        )
+        assert r11.status_code == 429
+
+    def test_phone_validation_error_does_not_consume_phone_slot(
+        self,
+        client: TestClient,
+    ) -> None:
+        """D1 reforço: payload com phone malformado retorna 422 ANTES do
+        rate limit ser tocado.
+
+        validate_phone_e164 (Pydantic field_validator) roda na borda HTTP,
+        antes do endpoint body executar — phone malformado nunca consome
+        slot de rate limit (phone OU IP). Garantia de que atacante não
+        consegue burlar via formato divergente do mesmo número.
+        """
+        phone = "+5531999887766"
+        bad_payloads = ["+55 31 99988-7766", "+55-31-99988-7766", "5531999887766"]
+
+        # 100 tentativas com formatos malformados — todas 422.
+        for _ in range(100):
+            for bad in bad_payloads:
+                r = client.post("/api/v1/auth/request-otp", json={"phone": bad})
+                assert r.status_code == 422
+
+        # Phone canônico deve ter 3 slots livres (limit 3/h, nada consumido).
+        for _ in range(3):
+            r = client.post("/api/v1/auth/request-otp", json={"phone": phone})
+            assert r.status_code != 429
+
+        # 4º consome o limit.
+        r4 = client.post("/api/v1/auth/request-otp", json={"phone": phone})
+        assert r4.status_code == 429

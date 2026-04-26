@@ -8,10 +8,11 @@ import pytest
 from fastapi.testclient import TestClient
 from redis.exceptions import RedisError
 from slowapi import Limiter
+from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
 from app.core import rate_limit
-from app.core.rate_limit import limiter
+from app.core.rate_limit import check_phone_rate_limit, limiter
 
 
 class TestBuildLimiterFailOpen:
@@ -120,3 +121,91 @@ class TestRuntimeFailOpen:
 
         # Mensagem canônica do slowapi (extension.py:635-637).
         assert "Rate limit storage unreachable" in caplog.text
+
+
+class TestCheckPhoneRateLimit:
+    """Helper `check_phone_rate_limit` — segunda camada de defesa.
+
+    Manual hit em `limiter.limiter.hit()` (slowapi internals) bypassa
+    o `_check_request_limit` → fail-open precisa ser replicado aqui
+    (sem isso, queda do Redis volta a virar 500, regredindo MEDIUM #3).
+    """
+
+    def test_raises_rate_limit_exceeded_when_limit_hit(self) -> None:
+        """4ª chamada com limit `3/hour` raise RateLimitExceeded.
+
+        Pattern análogo aos testes IP-based em test_auth.py — fixture
+        autouse `_reset_rate_limiter` zera contadores entre testes.
+        """
+        phone = "+5533999990010"
+
+        for _ in range(3):
+            check_phone_rate_limit(scope="unit-test", phone=phone, limit_str="3/hour")
+
+        with pytest.raises(RateLimitExceeded):
+            check_phone_rate_limit(scope="unit-test", phone=phone, limit_str="3/hour")
+
+    def test_fail_open_when_storage_raises(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Storage `.hit()` raise → swallow + WARNING log (sem propagar).
+
+        Slowapi `swallow_errors=True` cobre `_check_request_limit` interno,
+        NÃO cobre hit manual via `limiter.limiter.hit`. Helper replica
+        pattern fail-open (ADR-022 + CP3c Auth D2).
+        """
+
+        def raise_redis_error(*args: Any, **kwargs: Any) -> bool:
+            raise RedisError("simulated runtime outage")
+
+        monkeypatch.setattr(limiter.limiter, "hit", raise_redis_error)
+
+        with caplog.at_level(logging.WARNING, logger="app.core.rate_limit"):
+            # Não deve raise — fail-open.
+            check_phone_rate_limit(
+                scope="unit-test",
+                phone="+5533999990011",
+                limit_str="3/hour",
+            )
+
+        assert "phone_rate_limit.storage_unreachable" in caplog.text
+        assert "scope=unit-test" in caplog.text
+
+    def test_noop_when_rate_limit_disabled(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """RATE_LIMIT_ENABLED=False (limiter.enabled=False) → no-op total.
+
+        Espelha comportamento do decorator `@limiter.limit` quando
+        slowapi `enabled=False` (E5 — Limiter inerte).
+        """
+        monkeypatch.setattr(limiter, "enabled", False)
+        phone = "+5533999990012"
+
+        # Bem além do limit — não deve raise nem incrementar storage.
+        for _ in range(50):
+            check_phone_rate_limit(scope="unit-test", phone=phone, limit_str="3/hour")
+
+    def test_namespace_separates_scopes(self) -> None:
+        """Mesmo phone em scopes diferentes — contadores independentes.
+
+        Identifiers `(f"phone:{scope}", phone)` namespeiam keys Redis
+        por scope. request-otp e verify-otp não compartilham contador
+        para o mesmo phone (E4).
+        """
+        phone = "+5533999990013"
+
+        # Esgota scope-a (limit 2/hour).
+        for _ in range(2):
+            check_phone_rate_limit(scope="scope-a", phone=phone, limit_str="2/hour")
+
+        # 3ª chamada em scope-a raise.
+        with pytest.raises(RateLimitExceeded):
+            check_phone_rate_limit(scope="scope-a", phone=phone, limit_str="2/hour")
+
+        # scope-b com mesmo phone deve ter contador independente.
+        for _ in range(2):
+            check_phone_rate_limit(scope="scope-b", phone=phone, limit_str="2/hour")
