@@ -26,6 +26,7 @@ from app.utils.validators import (
 if TYPE_CHECKING:
     from app.models.category import Category
     from app.models.city import City
+    from app.models.store_opening_hours import StoreOpeningHours
 
 # CHECK constraints geradas dinamicamente dos enums (fonte única de verdade)
 _STATUS_CHECK = "status IN (" + ", ".join(f"'{s.value}'" for s in StoreStatus) + ")"
@@ -91,6 +92,14 @@ class Store(Base, TimestampMixin, SoftDeleteMixin):
     # silenciosamente disparar N+1 query por linha.
     category: Mapped["Category"] = relationship("Category", lazy="raise")
     city: Mapped["City"] = relationship("City", lazy="raise")
+    # Slots de horário (ADR-026 dec. 1, CP1b 2026-04-26). Cascade de DELETE é
+    # garantido no DB via FK ondelete=CASCADE — não precisa cascade Python.
+    # order_by garante slots determinísticos no response (frontend agrupa por dia).
+    opening_hours: Mapped[list["StoreOpeningHours"]] = relationship(
+        "StoreOpeningHours",
+        lazy="raise",
+        order_by="StoreOpeningHours.day_of_week, StoreOpeningHours.open_time",
+    )
 
     # Endereço textual (não reusa Address — ver docstring)
     street: Mapped[str] = mapped_column(String(200), nullable=False)

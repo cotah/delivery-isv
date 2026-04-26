@@ -30,6 +30,7 @@ from app.models import (  # noqa: F401
     product_addon_group,
     product_variation,
     store,
+    store_opening_hours,
     user,
 )
 

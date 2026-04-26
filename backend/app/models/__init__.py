@@ -23,6 +23,7 @@ from app.models.product import Product
 from app.models.product_addon_group import ProductAddonGroup
 from app.models.product_variation import ProductVariation
 from app.models.store import Store
+from app.models.store_opening_hours import StoreOpeningHours
 from app.models.user import User
 
 __all__ = [
@@ -41,5 +42,6 @@ __all__ = [
     "ProductAddonGroup",
     "ProductVariation",
     "Store",
+    "StoreOpeningHours",
     "User",
 ]

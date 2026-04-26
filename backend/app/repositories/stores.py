@@ -68,7 +68,11 @@ def get_active_store(
     Segurança: não diferencia "nunca existiu" de "removida" — retorno None
     uniforme preserva opacidade do UUID (ADR-024).
 
-    Eager load (ADR-014): selectinload de category e city.
+    Eager load (ADR-014):
+    - category, city: embeds de StoreDetail
+    - opening_hours: lista de slots (ADR-026 dec. 1, CP1b). Sem essa eager
+      load, lazy="raise" no model levanta InvalidRequestError no service
+      (_build_store_detail acessa store.opening_hours).
     """
     stmt = (
         select(Store)
@@ -80,6 +84,7 @@ def get_active_store(
         .options(
             selectinload(Store.category),
             selectinload(Store.city),
+            selectinload(Store.opening_hours),
         )
     )
     return session.execute(stmt).scalar_one_or_none()

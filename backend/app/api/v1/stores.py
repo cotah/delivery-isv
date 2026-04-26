@@ -46,8 +46,11 @@ def list_stores(
     description=(
         "Retorna detalhe completo de uma loja aprovada — identidade pública, "
         "endereço granular, descrição, telefone E.164, pedido mínimo, "
-        "cover_image, logo (ADR-026 dec. 6: HttpUrl validado). opening_hours "
-        "fica pro CP1b do HIGH #1. "
+        "cover_image, logo (ADR-026 dec. 6: HttpUrl validado). "
+        "opening_hours: lista de slots ordenados por (day_of_week, open_time). "
+        "Lista vazia = sem horário cadastrado (ADR-026 dec. 4). "
+        "is_open_now: bool calculado em runtime (sem cache no MVP — "
+        "ADR-026 reforço D7; plano de Redis quando latência for problema). "
         "Retorna 404 se loja não existe, não está aprovada ou foi removida. "
         "Retorna 422 se store_id não for UUID válido. "
         "Endpoint público — não exige autenticação."

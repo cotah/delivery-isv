@@ -204,8 +204,8 @@ class TestGetStoreDetailEndpoint:
         store = store_factory(status=StoreStatus.APPROVED)
         response = client.get(f"/api/v1/stores/{store.id}")
         body = response.json()
-        # 5 campos novos em CP1a HIGH #1 (ADR-026): description, phone,
-        # minimum_order_cents, cover_image, logo.
+        # 5 campos do CP1a HIGH #1: description, phone, minimum_order_cents,
+        # cover_image, logo. CP1b adicionou: opening_hours + is_open_now.
         expected = {
             "id",
             "name",
@@ -222,6 +222,8 @@ class TestGetStoreDetailEndpoint:
             "zip_code",
             "category",
             "city",
+            "opening_hours",
+            "is_open_now",
         }
         assert set(body.keys()) == expected
 
@@ -398,3 +400,140 @@ class TestStoreExtensionResponseShape:
         }
         leaked = keys & forbidden
         assert not leaked, f"PII/internal fields leaked: {leaked}"
+
+
+class TestStoreDetailOpeningHours:
+    """opening_hours + is_open_now expostos via API (ADR-026 dec. 1, 4 + reforço D7)."""
+
+    def test_store_with_no_hours_returns_empty_array(
+        self,
+        client: TestClient,
+        store_factory: Any,
+    ) -> None:
+        """ADR-026 dec. 4: lojas sem horário cadastrado → opening_hours: []"""
+        store = store_factory(status=StoreStatus.APPROVED)
+        response = client.get(f"/api/v1/stores/{store.id}")
+        body = response.json()
+        assert body["opening_hours"] == []
+        assert body["is_open_now"] is False  # sem slots = nunca aberto
+
+    def test_store_with_hours_returns_sorted_array(
+        self,
+        client: TestClient,
+        store_factory: Any,
+        db_session: Session,
+    ) -> None:
+        """relationship.order_by garante (day_of_week, open_time) determinístico."""
+        from datetime import time
+
+        from app.models.store_opening_hours import StoreOpeningHours
+
+        store = store_factory(status=StoreStatus.APPROVED)
+        # Inserindo fora de ordem: terça, segunda almoço, segunda jantar, sábado.
+        slots = [
+            StoreOpeningHours(
+                store_id=store.id, day_of_week=2, open_time=time(11, 0), close_time=time(23, 0)
+            ),
+            StoreOpeningHours(
+                store_id=store.id, day_of_week=1, open_time=time(18, 0), close_time=time(23, 0)
+            ),
+            StoreOpeningHours(
+                store_id=store.id, day_of_week=1, open_time=time(11, 0), close_time=time(14, 0)
+            ),
+            StoreOpeningHours(
+                store_id=store.id, day_of_week=6, open_time=time(11, 0), close_time=time(23, 0)
+            ),
+        ]
+        for s in slots:
+            db_session.add(s)
+        db_session.flush()
+
+        response = client.get(f"/api/v1/stores/{store.id}")
+        hours = response.json()["opening_hours"]
+        assert len(hours) == 4
+        # Ordenação esperada: (day_of_week, open_time) ASC
+        assert [h["day_of_week"] for h in hours] == [1, 1, 2, 6]
+        assert hours[0]["open_time"] == "11:00:00"
+        assert hours[1]["open_time"] == "18:00:00"
+
+    def test_store_detail_includes_opening_hours_shape(
+        self,
+        client: TestClient,
+        store_factory: Any,
+        db_session: Session,
+    ) -> None:
+        """Cada slot tem (day_of_week, open_time, close_time)."""
+        from datetime import time
+
+        from app.models.store_opening_hours import StoreOpeningHours
+
+        store = store_factory(status=StoreStatus.APPROVED)
+        slot = StoreOpeningHours(
+            store_id=store.id, day_of_week=3, open_time=time(9, 0), close_time=time(18, 30)
+        )
+        db_session.add(slot)
+        db_session.flush()
+
+        response = client.get(f"/api/v1/stores/{store.id}")
+        hours = response.json()["opening_hours"]
+        assert hours == [{"day_of_week": 3, "open_time": "09:00:00", "close_time": "18:30:00"}]
+
+    def test_is_open_now_calculated_in_real_time(
+        self,
+        client: TestClient,
+        store_factory: Any,
+        db_session: Session,
+    ) -> None:
+        """ADR-026 reforço D7: is_open_now sem cache, recalculado a cada GET.
+
+        Cria um slot cobrindo 24h pro DOW de hoje em São Paulo. Espera True.
+        """
+        from datetime import datetime, time
+
+        from app.models.store_opening_hours import StoreOpeningHours
+        from app.services.stores import SAO_PAULO_TZ
+
+        now_sp = datetime.now(SAO_PAULO_TZ)
+        dow_today = now_sp.isoweekday() % 7
+
+        store = store_factory(status=StoreStatus.APPROVED)
+        slot = StoreOpeningHours(
+            store_id=store.id,
+            day_of_week=dow_today,
+            open_time=time(0, 0),
+            close_time=time(23, 59),
+        )
+        db_session.add(slot)
+        db_session.flush()
+
+        response = client.get(f"/api/v1/stores/{store.id}")
+        assert response.json()["is_open_now"] is True
+
+    def test_is_open_now_false_when_slot_for_other_day(
+        self,
+        client: TestClient,
+        store_factory: Any,
+        db_session: Session,
+    ) -> None:
+        """Slot pra dia diferente do atual: is_open_now=False."""
+        from datetime import datetime, time
+
+        from app.models.store_opening_hours import StoreOpeningHours
+        from app.services.stores import SAO_PAULO_TZ
+
+        now_sp = datetime.now(SAO_PAULO_TZ)
+        dow_today = now_sp.isoweekday() % 7
+        dow_other = (dow_today + 3) % 7  # 3 dias à frente
+
+        store = store_factory(status=StoreStatus.APPROVED)
+        slot = StoreOpeningHours(
+            store_id=store.id,
+            day_of_week=dow_other,
+            open_time=time(0, 0),
+            close_time=time(23, 59),
+        )
+        db_session.add(slot)
+        db_session.flush()
+
+        response = client.get(f"/api/v1/stores/{store.id}")
+        assert response.json()["is_open_now"] is False

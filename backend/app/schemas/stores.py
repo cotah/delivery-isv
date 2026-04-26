@@ -1,5 +1,6 @@
 """Schemas Pydantic pra endpoints de Store (ADR-020, ADR-022, ADR-023, ADR-026)."""
 
+from datetime import time
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl
@@ -71,12 +72,36 @@ class StoreRead(BaseModel):
     city: CitySummary
 
 
+class StoreOpeningHoursRead(BaseModel):
+    """Slot de horário de funcionamento (ADR-026 dec. 1, CP1b).
+
+    Frontend agrupa por `day_of_week` pra exibir tabela/lista de horários.
+
+    `day_of_week` segue convenção Postgres EXTRACT(DOW): 0=domingo..6=sábado
+    (ADR-026 reforço D1). Cruzar meia-noite: `close_time < open_time`
+    (ADR-026 dec. 3) — ex: pizzaria 18h-02h.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    day_of_week: int = Field(
+        ...,
+        ge=0,
+        le=6,
+        examples=[1],
+        description="0=domingo..6=sábado (Postgres DOW). NÃO Python weekday().",
+    )
+    open_time: time = Field(..., examples=["11:00"])
+    close_time: time = Field(..., examples=["23:00"])
+
+
 class StoreDetail(BaseModel):
     """Detalhe da loja (ADR-022, ADR-024, ADR-026). Exposto em GET /stores/{id}.
 
     Expande StoreRead com endereço completo (street, number, complement, zip_code)
     e campos de negócio do CP1a do HIGH #1 (ADR-026): description, phone,
-    minimum_order_cents, cover_image, logo. opening_hours fica pro CP1b.
+    minimum_order_cents, cover_image, logo. CP1b adicionou opening_hours +
+    is_open_now (recalculado em runtime sem cache, ADR-026 reforço D7).
 
     Continua NÃO expondo:
     - legal_name (razão social — fiscal)
@@ -88,9 +113,13 @@ class StoreDetail(BaseModel):
     zip_code retornado crú (8 dígitos sem hífen) — frontend formata.
     phone retornado em E.164 (validado por @validates no model + validate_phone_e164).
     cover_image / logo: HttpUrl validados (ADR-026 dec. 6).
+    opening_hours: lista vazia = sem horário cadastrado (ADR-026 dec. 4).
+    is_open_now: bool calculado em runtime via is_store_open_now() (ADR-026 reforço D7).
     """
 
-    model_config = ConfigDict(from_attributes=True)
+    # populate_by_name=True permite construtor direto usar `name=...` além do
+    # validation_alias `trade_name` (necessário pro _build_store_detail no service).
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
     id: UUID
     name: str = Field(..., validation_alias="trade_name", examples=["Pizzaria do Zé"])
@@ -111,6 +140,17 @@ class StoreDetail(BaseModel):
     zip_code: str = Field(..., examples=["35855000"], description="CEP com 8 dígitos sem hífen")
     category: CategorySummary
     city: CitySummary
+    opening_hours: list[StoreOpeningHoursRead] = Field(
+        default_factory=list,
+        description=(
+            "Slots ordenados por (day_of_week, open_time). "
+            "Lista vazia = sem horário cadastrado (ADR-026 dec. 4)."
+        ),
+    )
+    is_open_now: bool = Field(
+        ...,
+        description="Calculado em runtime por GET (sem cache, ADR-026 reforço D7).",
+    )
 
 
 class StoreListQuery(BaseModel):
