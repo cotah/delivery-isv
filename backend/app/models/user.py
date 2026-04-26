@@ -49,6 +49,9 @@ class User(Base, TimestampMixin):
         lazy="raise",
         uselist=False,
         foreign_keys="[Customer.user_id]",
+        # overlaps="user" linka este lado ao Customer.user sem back_populates
+        # (silencia SAWarning sobre 2 relationships na mesma FK).
+        overlaps="user",
     )
 
     @validates("phone")

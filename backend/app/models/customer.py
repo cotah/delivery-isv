@@ -79,7 +79,9 @@ class Customer(Base, TimestampMixin, SoftDeleteMixin):
     # ORM relationship pra User (ADR-027 dec. 1).
     # lazy="raise" pattern projeto — força eager load explícito (selectinload).
     # Sem back_populates — User declara seu próprio relationship com lazy="raise".
-    user: Mapped["User"] = relationship("User", lazy="raise")
+    # overlaps="customer" linka este lado ao User.customer reverso sem
+    # back_populates (silencia SAWarning sobre 2 relationships na mesma FK).
+    user: Mapped["User"] = relationship("User", lazy="raise", overlaps="customer")
 
     __table_args__ = (
         # UNIQUE parcial em email (só considera rows com email != NULL)

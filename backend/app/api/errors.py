@@ -29,6 +29,8 @@ class ErrorCode(StrEnum):
     VALIDATION_FAILED = "validation_failed"
     NOT_FOUND = "not_found"
     STORE_NOT_FOUND = "store_not_found"
+    CUSTOMER_NOT_FOUND = "customer_not_found"
+    CUSTOMER_ALREADY_EXISTS = "customer_already_exists"
     SMS_PROVIDER_ERROR = "sms_provider_error"
     INVALID_OTP_CODE = "invalid_otp_code"
     RATE_LIMITED = "rate_limited"
