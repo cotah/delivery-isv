@@ -28,7 +28,7 @@
 - `alembic_version` — 1 row (controle do Alembic)
 
 ### Migrations
-**21 aplicadas** em sequência:
+**22 aplicadas** em sequência:
 1. `57aa2a205690` — create cities table
 2. `ffd2034a50bd` — seed mg cities
 3. `6ebc0349ab8c` — create customers table
@@ -50,23 +50,32 @@
 19. `d9a8d7e19f52` — rename product_variations status constraint (LOW debt fix — remove duplicate prefix from CP1 HIGH)
 20. `b964b10e6672` — add Store extension fields description/phone/minimum_order_cents/cover_image/logo (HIGH debt #1, CP1a — ADR-026)
 21. `9a74dcc91e93` — create store_opening_hours table (HIGH debt #1, CP1b — ADR-026 dec. 1) — closes HIGH cycle 3/3
+22. `64f6e6cef194` — add user_id FK to customers (Customer cycle CP1 — ADR-027 dec. 1)
 
 ### Qualidade
-- **575 testes** passando em ~3.4s
-- **mypy strict** limpo em **113 source files**
+- **637 testes** passando em ~5s
+- **mypy strict** limpo em **123 source files**
 - **ruff check** + **ruff format** limpos
 - Zero `# noqa`, zero `# type: ignore` novos (2 narrow ignores legítimos pré-existentes em test_base.py CP2 com justificativa documentada)
 
-### API REST — catálogo público + Auth completos
+### API REST — catálogo público + Auth + Customer completos
 - **Versionamento:** `/api/v1/` (ADR-021)
 - **Estrutura em 4 camadas:** schemas → api/v1 → services → repositories → models (ADR-020)
-- **Endpoints implementados:** 6 (3 catálogo público + 2 auth + 1 protegido)
+- **14 ErrorCodes** em `app/api/errors.py`: validation_failed, not_found, store_not_found, customer_not_found, customer_already_exists, address_not_found, city_not_found, sms_provider_error, invalid_otp_code, rate_limited, unauthenticated, token_expired, invalid_token, internal_error
+- **Endpoints implementados:** 13 (3 catálogo público + 2 auth + 1 protegido + 3 Customer + 4 Address)
   - `GET /api/v1/stores` — lista lojas aprovadas com category/city aninhados, paginação offset/limit
-  - `GET /api/v1/stores/{store_id}` — detalhe com endereço completo, 404 `store_not_found` específico, 404 opaco pra soft-deleted (ADR-022)
-  - `GET /api/v1/stores/{store_id}/products` — cardápio aninhado 3 níveis (produto → variações + grupos de adicionais → adicionais), is_available calculado, ordenação alfabética placeholder, limit query param default 500 max 1000 (ADR-024 variante sem paginação tradicional)
-  - `POST /api/v1/auth/request-otp` — valida E.164 via field_validator, invalida OTPs anteriores, gera código 6 dígitos + sha256 hash, persiste OtpCode, commit, chama SMSProvider. Rate limit IP via slowapi+Redis (10/h). 422/429/502 (ADR-025).
-  - `POST /api/v1/auth/verify-otp` — valida hash com hmac.compare_digest (constant-time), incrementa attempts ANTES da validação (anti brute force), marca consumed, cria User lazy se não existir, retorna JWT. Anti-enumeração: 5 cenários de erro (not_found, hash errado, expired, consumed, attempts esgotados) → 1 response 400 `invalid_otp_code` com mesma mensagem. Rate limit IP via slowapi+Redis (30/h). 400/422/429 (ADR-025).
-  - `GET /api/v1/users/me` — primeiro endpoint protegido. Requer Bearer JWT no header Authorization. Retorna UserRead. 401 com WWW-Authenticate header (RFC 6750) em 4 cenários: unauthenticated, token_expired, invalid_token (malformed), invalid_token (user not in DB). Diferenciação UX (ADR-025).
+  - `GET /api/v1/stores/{store_id}` — detalhe com endereço completo + horários + is_open_now (ADR-026)
+  - `GET /api/v1/stores/{store_id}/products` — cardápio aninhado 3 níveis (ADR-024)
+  - `POST /api/v1/auth/request-otp` — OTP por SMS, rate limit slowapi+Redis (ADR-025)
+  - `POST /api/v1/auth/verify-otp` — verifica OTP, retorna JWT (ADR-025)
+  - `GET /api/v1/users/me` — primeiro endpoint protegido (ADR-025)
+  - `GET /api/v1/customers/me` — perfil do User logado, 404 `customer_not_found` se não cadastrou (ADR-027 dec. 2)
+  - `POST /api/v1/customers` — cria Customer (lazy creation), 201, 409 `customer_already_exists` se já tem (ADR-027 dec. 4). Phone vem do User (ADR-027 dec. 6).
+  - `PATCH /api/v1/customers/me` — atualiza name/email/cpf/birth_date, exclude_unset (ADR-027 dec. 8)
+  - `GET /api/v1/customers/me/addresses` — lista, ordering is_default DESC + created_at DESC (ADR-027)
+  - `POST /api/v1/customers/me/addresses` — cria, 201, is_default switch transacional (ADR-027 dec. 8)
+  - `PATCH /api/v1/customers/me/addresses/{address_id}` — atualiza, 404 disfarçado se de outro customer (ADR-027 A)
+  - `DELETE /api/v1/customers/me/addresses/{address_id}` — soft-delete, 204, sem auto-promoção (ADR-027 dec. 10)
 - **Padrões estabelecidos:**
   - Formato de erro uniforme `{"error": {"code", "message", "details"}}` (ADR-022)
   - Envelope de paginação `{"items", "total", "offset", "limit"}` (ADR-023)
@@ -159,8 +168,50 @@ Débito LOW resolvido em paralelo (commit b9e79c7) — CheckConstraint duplicate
 - ADRs: 25 → **26** (ADR-026 com 8 decisões + 4 reforços documentando HIGH #1 inteiro)
 - Backend agora **mobile-ready**: cliente real consegue abrir app, ver lista de lojas com logo + minimum_order, ver cardápio organizado por seção com produtos em destaque, login via SMS, perfil pessoal, e em cada loja vê foto, descrição, telefone, horários completos com badge "Aberto agora".
 
+**Ciclo Customer (ADR-027) — COMPLETO em 2026-04-26 (3 sub-checkpoints feat + 1 docs final):**
+
+CP1 (commit acd8e99) — Foundation User ↔ Customer. `Customer.user_id` UUID UNIQUE NOT NULL FK `users(id)` RESTRICT. Migration `64f6e6cef194`. Pattern novo: `uselist=False` em `User.customer` (1:1 reverso do lado da PK) + `foreign_keys` explícito + `overlaps` (descoberto em CP2 e formalizado em CP4). ADR-027 criado com 15 decisões cobrindo o ciclo inteiro. `customer_factory` novo. +8 testes.
+
+CP2 (commit 3563624) — Customer endpoints. 3 endpoints: `GET /customers/me` (200/404/401), `POST /customers` (201/404/422/401), `PATCH /customers/me` (200/404/422/401). Schemas `extra="forbid"` + `exclude_unset=True` no PATCH. Hierarquia `CustomerError → CustomerNotFoundError + CustomerAlreadyExistsError` traduzida pra HTTPException no endpoint. Pattern novo: POST 201 Created + service recebe `current_user` (User completo, não só id). +20 testes.
+
+CP3 (commit d72ebc4) — Address CRUD. 4 endpoints em `/customers/me/addresses`: GET (200/404/401), POST (201/404/422/401), PATCH (200/404/422/401), DELETE (204/404/401). `is_default` switch transacional no service (UNIQUE parcial protege race no banco). `city_id` validation pre-insert via `session.get(City, id)` → `CityNotFoundError` → 422 `CITY_NOT_FOUND`. Pattern novo: DELETE 204 No Content (primeiro do projeto) + helpers `_raise_*` DRY. `address_factory` novo. +34 testes (incluindo 7 cenários `is_default` explícitos).
+
+CP4 (este commit) — Pausa de docs final. Decisão 15 do ADR-027 estendida com pattern `overlaps` descoberto em runtime no CP2.
+
+**Patterns reusáveis estabelecidos no Ciclo Customer (5 novos):**
+
+1. **POST que cria recurso REST com `status_code=status.HTTP_201_CREATED` explícito** (CP2 — primeiro do projeto)
+2. **Hierarquia de exceções no service traduzida pra HTTPException no endpoint** (CP2 + CP3)
+3. **Service recebe `current_user` completo (não só user_id)** — necessário pra phone match (ADR-027 dec. 6)
+4. **DELETE 204 No Content** (CP3 — primeiro do projeto). Helpers `_raise_*` DRY no endpoint module.
+5. **Pattern `overlaps` em ambos os lados de relationship 1:1 reverso sem `back_populates`** (descoberto em runtime no CP2, formalizado em CP4 — ADR-027 dec. 15 estendida).
+
+**Marco do projeto (fim do Ciclo Customer):**
+- 575 testes (fim HIGH) → **637 ao fim do Customer** (+62, +10.8%)
+- 21 → **22 migrations** (+1: customers.user_id FK)
+- 9 → **13 endpoints** (+4 Customer/Address; +3 Customer no CP2)
+- 113 → **123 source files mypy** (+10 módulos: 5 customer + 5 address)
+- 12 → **14 ErrorCodes** (+CUSTOMER_NOT_FOUND, +CUSTOMER_ALREADY_EXISTS, +ADDRESS_NOT_FOUND, +CITY_NOT_FOUND)
+- ADRs: 26 → **27** (ADR-027 com 15 decisões; refinamento Dec. 15 com `overlaps` em CP4)
+
+**Cliente real consegue ponta-a-ponta exceto Order:**
+1. Splash + lista de lojas
+2. Detalhe da loja com horários + is_open_now
+3. Cardápio organizado
+4. Login OTP
+5. Perfil User + Customer
+6. Gerenciar endereços de entrega
+
+Falta apenas Order (próximo grande ciclo).
+
+**Débitos novos rastreados durante o Ciclo Customer (2):**
+
+**LOW**: Email validation rigorosa de formato. Hoje `CustomerCreate/Update` usam `str + max_length=254` sem validação de formato (pode aceitar `"abc"` como email no banco). Solução: adicionar `email-validator` dep + `EmailStr` no schema. Custo: ~5 min. Bloqueante: não (emails ainda não são usados em comunicação real). Resolver antes do piloto.
+
+**MEDIUM**: `ValueError` em `@validates` do model retorna 500 Internal Server Error em vez de 422 `validation_failed`. Afeta CPF (e potencialmente phone, embora improvável via API já que phone vem do User logado). Solução: global exception handler em FastAPI capturando `ValueError` → `HTTPException(422, validation_failed)` com message do error. Custo: ~30 min. **Bloqueante pra UX**: sim (cliente recebe 500 ao mandar CPF malformatado, vira ticket de suporte). Resolver antes do piloto.
+
 ### Arquitetura documentada
-- **26 ADRs** em `C:\Users\henri\Documents\My second mind\Projetos\ISV Delivery\11 - Decisões Técnicas (log).md`
+- **27 ADRs** em `C:\Users\henri\Documents\My second mind\Projetos\ISV Delivery\11 - Decisões Técnicas (log).md`
 - 9 StrEnums em `app/domain/enums.py`: `Environment`, `AddressType`, `TaxIdType`, `StoreStatus`, `ProductStatus`, `ProductVariationStatus`, `AddonGroupType`, `MenuSection`, `OrderStatus`
 
 ---
@@ -394,36 +445,36 @@ docker exec delivery-postgres-1 psql -U isv -d isv_delivery -c "SELECT ..."
 
 ## 6. Próximo passo sugerido
 
-**Status:** Ciclo Auth COMPLETO + Ciclo Débitos HIGH COMPLETO. Backend **mobile-ready**. Sem débito HIGH pendente. Foundation sólida pra ciclos seguintes.
+**Status:** Auth completo + HIGH 3/3 + **Customer cycle 100% completo**. Backend cobre fluxo cliente real ponta-a-ponta exceto Order.
 
-**Próximo grande ciclo: Customer endpoints**
+**Próximo grande ciclo: Order endpoints**
 
-Razão: Customer é continuação natural (User já existe do Auth, FK 1:1 lazy). Pattern JWT do CP4 reusável direto em rotas protegidas. Bloqueia Order (Order.customer_id FK).
+Foundation existe há várias sessões (commits `26d7243`, `5dfc717`, `d706566`, `99e486a`):
+- `Order` model
+- `OrderItem` model
+- `OrderItemAddon` model
+- `OrderStatusLog` model
+- FK `Order.customer_id` RESTRICT
+- FK `Order.store_id` RESTRICT
 
-Escopo provável (a refinar em ADR dedicado quando ciclo iniciar):
-- Customer model (verificar se existe parcial — `customer_anonymization.py` em services indica trabalho prévio)
-- Schema CustomerRead, CustomerCreate, CustomerUpdate
-- Endpoints: `GET /api/v1/customers/me`, `POST /api/v1/customers`, `PATCH /api/v1/customers/me`
-- Customer-Address relationship (cadastro de endereços para entrega)
-- Integração com User: `User.customer` relationship 1:1
+Falta apenas camada de aplicação (schemas + repository + service + endpoints). Estimativa otimista: 6-10h ritmo Henrique (~4-5 sub-CPs).
 
-Estimativa: 6-10h ritmo Henrique, 3-4 sub-checkpoints.
+**Estrutura provável:**
+- **CP1**: Schemas Pydantic Order/OrderItem/OrderItemAddon + Read endpoints (`GET /orders`, `GET /orders/{id}`)
+- **CP2**: `POST /orders` (criar pedido novo, transação Customer + Store + Items + Addons + status inicial)
+- **CP3**: Status transitions (`PATCH /orders/{id}/status` — lojista atualiza)
+- **CP4**: Listagem por lojista (`GET /stores/{store_id}/orders` pra dashboard)
+- **CP5**: Pausa de docs final
 
-**Após Ciclo Customer:**
+**Após Order cycle:**
+- Mobile React Native (segundo agente, pode iniciar AGORA mesmo)
+- Pagar.me integration (CNPJ pendente)
+- LGPD cycle (`anonymize_customer` real + `DELETE /users/me` + global ValueError handler)
 
-- Ciclo Order (core do produto, requer Customer FK) — ~15-25h
-- Mobile React Native em paralelo (segundo agente, será aberto pelo Henrique)
-- Pagar.me + Zenvia (depende CNPJ)
-
-**Mobile React Native — pode começar AGORA em paralelo:**
-
-Backend cobre todas as telas iniciais necessárias:
-- Splash + lista de lojas (com logo + minimum_order) + detalhe da loja (description, phone, horários, is_open_now badge)
-- Cardápio organizado (sections + featured + display_order)
-- Login via SMS (request-otp → verify-otp → JWT)
-- Perfil `/users/me`
-
-Order endpoints virão em paralelo com mobile crescendo.
+**Débitos pré-piloto a resolver:**
+- LOW `email-validator` (~5min)
+- MEDIUM `ValueError` → 422 handler (~30min)
+- 3 MEDIUM herdados do Auth cycle (secrets strategy, rate limit phone, Redis fail-open)
 
 ---
 
