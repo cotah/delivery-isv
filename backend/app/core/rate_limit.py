@@ -6,11 +6,19 @@ NÃO são aplicados nos decorators ainda — slowapi `key_func` é síncrono
 e extrair phone do body exige body parsing assíncrono. Pattern previsto
 em débito MEDIUM "Rate limit phone-based em endpoints Auth".
 
-Fail-open quando Redis indisponível: slowapi tenta lazy connect no primeiro
-request. Se falhar, tenta-se um fallback in-memory na inicialização — startup
-nunca trava por causa do rate limit. Comportamento documentado: rate limit
-perde estado entre restarts em vez de derrubar serviço (priorizar
-disponibilidade do login).
+Fail-open quando Redis indisponível, em duas dimensões:
+
+1. **Inicialização (startup):** se `Limiter(storage_uri=...)` levantar,
+   try/except defensivo cai pra Limiter in-memory — app sobe vivo.
+
+2. **Runtime (Redis cai DEPOIS do app subir):** slowapi flags
+   `swallow_errors=True` + `in_memory_fallback_enabled=True` capturam
+   `RedisError` no primeiro `.hit()`, marcam storage dead, transicionam
+   pra in-memory automaticamente (rate limit per-process preservado),
+   loga WARNING via logger `"slowapi"`. Auto-recovery quando Redis volta.
+
+Princípio: app de delivery prioriza disponibilidade do login sobre
+proteção 100% contra abuso temporário (ADR-022 + CP3c Auth D2).
 
 Custom handler para 429 retorna formato canônico do projeto (ADR-022)
 com `Retry-After` no header.
@@ -31,7 +39,7 @@ logger = logging.getLogger(__name__)
 
 
 def _build_limiter() -> Limiter:
-    """Cria Limiter com storage_uri=REDIS_URL — fail-open na inicialização.
+    """Cria Limiter com storage_uri=REDIS_URL — fail-open em duas dimensões.
 
     RATE_LIMIT_ENABLED=False → Limiter inerte (slowapi vira no-op).
     Conexão Redis é lazy: slowapi conecta no primeiro request, não na
@@ -40,10 +48,13 @@ def _build_limiter() -> Limiter:
     inesperado, fallback para Limiter in-memory: requests passam, contagem
     perde estado entre restarts. Login mantido vivo (ADR-025 decisão 8).
 
-    Fail-open RUNTIME (Redis cai DEPOIS do app subir) NÃO está coberto
-    aqui — slowapi levanta exception em `limiter.limit(...)` decorado.
-    Solução exigiria middleware custom interceptando antes do exception
-    handler. Débito MEDIUM registrado.
+    Runtime fail-open (Redis cai DEPOIS do app subir) coberto pelas flags
+    `swallow_errors=True` + `in_memory_fallback_enabled=True` — slowapi
+    captura `RedisError` no `.hit()`, marca `_storage_dead=True`,
+    transiciona pra in-memory transparente. Auto-recovery via
+    `_storage.check()` periódico quando Redis volta. Log WARNING emitido
+    pelo logger `"slowapi"` (propaga pra root — captura via Sentry/Datadog
+    quando observability entrar).
     """
     settings = get_settings()
 
@@ -56,6 +67,8 @@ def _build_limiter() -> Limiter:
             key_func=get_remote_address,
             storage_uri=settings.REDIS_URL,
             default_limits=[],
+            swallow_errors=True,  # fail-open runtime — ADR-022 + CP3c Auth D2
+            in_memory_fallback_enabled=True,  # proteção residual durante outage Redis
         )
     except Exception as exc:
         # Fail-open: sem storage Redis, slowapi cai pra in-memory.
