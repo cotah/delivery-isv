@@ -7,12 +7,13 @@
 ## 1. Estado atual (2026-04-26)
 
 ### Schema de domínio
-**17 tabelas no Postgres:**
+**18 tabelas no Postgres:**
 - `cities` — 3 rows (seed MG: Tarumirim, Itanhomi, Alvarenga)
 - `customers` — 0 rows (produção real, sem seed)
 - `addresses` — 0 rows (depende de Customer)
 - `categories` — 3 rows (seed: Pizzaria, Lanchonete, Marmita)
 - `stores` — 0 rows (produção real)
+- `store_opening_hours` — 0 rows (slots de horário de funcionamento, ADR-026 dec. 1)
 - `products` — 0 rows
 - `product_variations` — 0 rows
 - `addon_groups` — 0 rows
@@ -27,7 +28,7 @@
 - `alembic_version` — 1 row (controle do Alembic)
 
 ### Migrations
-**20 aplicadas** em sequência:
+**21 aplicadas** em sequência:
 1. `57aa2a205690` — create cities table
 2. `ffd2034a50bd` — seed mg cities
 3. `6ebc0349ab8c` — create customers table
@@ -48,10 +49,11 @@
 18. `90b06a960788` — add display_order/menu_section/featured to products + display_order to categories (HIGH debt #2)
 19. `d9a8d7e19f52` — rename product_variations status constraint (LOW debt fix — remove duplicate prefix from CP1 HIGH)
 20. `b964b10e6672` — add Store extension fields description/phone/minimum_order_cents/cover_image/logo (HIGH debt #1, CP1a — ADR-026)
+21. `9a74dcc91e93` — create store_opening_hours table (HIGH debt #1, CP1b — ADR-026 dec. 1) — closes HIGH cycle 3/3
 
 ### Qualidade
-- **535 testes** passando em ~2.8s
-- **mypy strict** limpo em **110 source files**
+- **575 testes** passando em ~3.4s
+- **mypy strict** limpo em **113 source files**
 - **ruff check** + **ruff format** limpos
 - Zero `# noqa`, zero `# type: ignore` novos (2 narrow ignores legítimos pré-existentes em test_base.py CP2 com justificativa documentada)
 
@@ -119,73 +121,43 @@ Cliente real consegue: POST /auth/request-otp → recebe SMS → POST /auth/veri
 2. Rate limit phone-based (CP3c) — slowapi async key_func limitation, antes de scale
 3. Fail-open runtime Redis (CP3c) — middleware custom, antes de staging Railway
 
-**Ciclo Débitos HIGH pré-piloto — EM ANDAMENTO (2/3 checkpoints + CP1a do #1 feito):**
+**Ciclo Débitos HIGH pré-piloto — COMPLETO em 2026-04-26 (3/3 débitos resolvidos + 1 LOW em paralelo):**
 
-Decisão estratégica revisada em 2026-04-26 (pós-descanso): zerar débitos HIGH antes de Customer/Order. Pattern profissional pra evitar que débito vire crise no piloto Tarumirim.
+Decisão estratégica revisada em 2026-04-26 (pós-descanso): zerar débitos HIGH antes de Customer/Order. Pattern profissional pra evitar que débito vire crise no piloto Tarumirim. Resultado: 3/3 débitos HIGH zerados + 1 LOW resolvido em paralelo, todos na mesma sessão (9 commits — maior dia do projeto).
 
-Checkpoint 1 (commit 3159442) — Toggle ProductVariation individual. Resolve débito HIGH #3.
-- Novo `ProductVariationStatus(StrEnum)` com ACTIVE/INACTIVE em `app/domain/enums.py`
-- Coluna `status` em ProductVariation (`String(20)`, default ACTIVE, server_default `'active'`, CHECK dinâmico, `@validates`)
-- Migration aditiva `661195884f97` (zero downtime — coluna nullable=False com server_default popula linhas existentes)
-- Service combinou contratos: variations INACTIVE filtradas DO ARRAY + variation.is_available HERDA do Product.status (pattern "combine, não substitua" — preservou contrato CP3 catálogo)
-- Defense-in-depth ADR-010: Pydantic + @validates + CHECK constraint
-- 11 testes novos (6 model status + 5 API filtering), 481 → 492 testes
+Débito #3 (commit 3159442) — Toggle ProductVariation individual. ProductVariation ganhou status (StrEnum binário ACTIVE/INACTIVE). is_available do Product combina: filtro novo (INACTIVE removida do array) + herança CP3 (variations herdam Product.status). Migration 661195884f97. 11 testes novos.
 
-Decisões deste CP1:
-- **D1 binário ACTIVE/INACTIVE** (não OUT_OF_STOCK/PAUSED como Product). Simetria não vale o custo — variation não tem visibilidade pública independente do produto pai (ADR-014 — variation reusa descrição/imagem do Product).
-- **D2 migration aditiva** com `server_default='active'`. Zero downtime, linhas pré-existentes (zero em prod local) recebem ACTIVE automaticamente.
-- **D3 BRANDA** (preservar `is_available=true` para Product com 0 variations cadastradas — estado anômalo de configuração). Backward compat com testes CP3 catálogo, reversível depois quando bootstrapping de loja for definido.
-- **D4 filtro no service** (não no repository SQL). Eager-load já traz tudo, filtragem em Python é simples e flexível. Ordem: filtro primeiro, depois ordenação.
+Débito #2 (commit 16e664d) — Menu organization. Product ganhou display_order/menu_section/featured. Category ganhou display_order. MenuSection enum 9 valores incluindo PIZZA e SNACK pro contexto BR (pizzaria + lanchonete em Tarumirim piloto). Repository ordena por (featured DESC, display_order ASC, name ASC). Migration 90b06a960788 com ROW_NUMBER OVER created_at (categories global, products PARTITION BY store_id). 19 testes novos.
 
-**Patterns reusáveis emergidos no CP1 HIGH:**
-- StrEnum binário ACTIVE/INACTIVE pra toggle individual em entidades dependentes
-- "Combine contratos, não substitua" quando feature nova precisa preservar contrato existente
-- Migration aditiva com `server_default` cobre rows pré-existentes sem backfill manual
-- Manual edit de migration pra adicionar `op.create_check_constraint(...)` quando autogenerate não detecta CheckConstraint em ADD COLUMN (limitação alembic)
+Débito #1 CP1a (commit c3dfecc) — Store expansion parte 1. 5 campos novos: description (Text), phone (E.164 obrigatório Opção E), minimum_order_cents (NULL=sem mínimo), cover_image, logo (HttpUrl). ProductRead.image_url também virou HttpUrl (Caminho 2 escopo total — pattern HttpUrl em TODOS campos URL). Migration b964b10e6672. ADR-026 criado cobrindo 8 decisões do HIGH #1 inteiro. 24 testes novos.
 
-Checkpoint 2 (commit 16e664d) — Menu organization. Resolve débito HIGH #2.
-- Product ganha 3 campos: `display_order` (Integer), `menu_section` (StrEnum `MenuSection` 9 valores incluindo PIZZA e SNACK pra contexto BR — pizzaria + lanchonete em Tarumirim piloto), `featured` (Boolean).
-- Category ganha `display_order` (Integer).
-- Migration `90b06a960788` aditiva, com `op.create_check_constraint('menu_section', 'products', ...)` manual (autogenerate não detecta CHECK em ADD COLUMN — pattern já visto no CP1).
-- ROW_NUMBER OVER (ORDER BY created_at) popula display_order: global em categories (3 rows seed → 1/2/3), PARTITION BY store_id em products (cada loja independente; 0 rows reais = no-op limpo).
-- Repository `list_store_products` ordena por (`featured DESC, display_order ASC, name ASC`) — composição com ordenação alfabética existente em vez de substituição.
-- 19 testes novos. 492 → 511.
+Débito #1 CP1b (commit 1c56b38) — Store expansion parte 2 (FECHA O CICLO). Tabela `store_opening_hours` + service helper `is_store_open(store, dt)` com guard contra naive datetime + endpoint StoreDetail expõe `opening_hours: list` + `is_open_now: bool` computed. ADR-026 estendido com 4 reforços (D1 DOW comment, D3 UNIQUE nuance, D4 deferred validation, D5 naive guard, D7 cache policy). Migration 9a74dcc91e93. 40 testes novos.
 
-**Débito LOW resolvido na sessão 2026-04-26 (commit b9e79c7):**
+Débito LOW resolvido em paralelo (commit b9e79c7) — CheckConstraint duplicate prefix do CP1 HIGH (3159442). Migration d9a8d7e19f52 dedicada. Pattern profissional: bug descoberto no CP2 → bug resolvido em ~30min via micro-CP entre CP2 e CP1a.
 
-CheckConstraint do CP1 HIGH (3159442) tinha nome com prefixo duplicado no banco: `ck_product_variations_ck_product_variations_status`. Causa: passou nome já-prefixado para `op.create_check_constraint()`; naming_convention adicionou prefixo de novo. Descoberto durante CP2 HIGH (Claude Code identificou pattern correto: passar só sufixo). Fix: migration `d9a8d7e19f52` dedicada, drop nome bugado + create nome limpo. Roundtrip 3x validado. Padrão profissional: bug descoberto → bug resolvido na mesma sessão. ~30min do diagnóstico ao commit.
+**Patterns reusáveis estabelecidos no Ciclo HIGH (pra futuros ciclos):**
 
-**Patterns reusáveis emergidos no CP2 HIGH + fix LOW:**
-- Pattern correto de CheckConstraint com `naming_convention`: passar SÓ o sufixo em `op.create_check_constraint()` E em `op.drop_constraint()`. naming_convention sempre prefixa com `ck_<table>_` automaticamente. Passar nome já-prefixado causa duplicação.
-- alembic `--sql` preview obrigatório antes de aplicar migration de rename de constraint (naming_convention re-prefixa nomes passados a `drop_constraint`, podendo gerar nomes truncados + hash sufixos imprevisíveis).
-- ROW_NUMBER OVER + PARTITION BY pattern pra popular `display_order` em rows pré-existentes — funciona com tabelas vazias (no-op limpo) e populadas (atribui sequência por grupo).
-- Repository com ordenação composta (`featured DESC, display_order ASC, name ASC`) — combina sinal de destaque + ordem manual + fallback alfabético, pattern aplicável a qualquer listagem ordenável.
+1. **PASSO 0 inspeção obrigatória** — pegou 41+ divergências acumuladas em 7 checkpoints anteriores + ~10 desvios sutis no HIGH (autogenerate vs manual edit, naming_convention always-on, lazy=raise vs back_populates, etc.).
+2. **`--sql` preview obrigatório antes de migration não-trivial** — pegou bug-do-bug no fix LOW da constraint, salvou aplicação do CP2 HIGH no banco local pós-reboot.
+3. **CheckConstraint pattern correto** — passar SÓ sufixo em `op.create_check_constraint()`; naming_convention sempre prefixa com `ck_<table>_`. Multi-coluna UNIQUE/Index passar nome COMPLETO (CLAUDE.md armadilha #2 — naming_convention só pega 1ª coluna).
+4. **Verificação de segurança antes de mudar schema validador** — count + URLs válidas antes de virar HttpUrl. Pattern aplicável a futuras mudanças de validação.
+5. **Opção E para migration NOT NULL em banco vazio** — honesta, sem placeholder. Plano de remediação pra futuro DB com dados documentado no ADR.
+6. **HttpUrl em TODOS campos URL** — sem fragmentação "este sim, aquele não". Caminho 2 escopo total.
+7. **`mask_phone_for_log` no `__repr__` proativamente** — evita criar mesmo débito LGPD que User tem. Pattern: aplicar fix preventivo quando custo é zero.
+8. **`relationship` lazy="raise" sem back_populates + sem cascade Python** — pattern do projeto. `ondelete=CASCADE` no DB faz trabalho real, Python cascade é redundante.
+9. **`populate_by_name=True` no schema com `validation_alias`** — necessário quando service constrói explicitamente em vez de `model_validate`.
+10. **Testar lógica pura (helper) com objetos em memória + testar comportamento DB com SQL direto** — separa concerns. lazy="raise" força disciplina.
+11. **Combinar contratos novos com existentes em vez de substituir** — preserva regressão + adiciona feature.
+12. **Documentar timezone hardcoded com plano de migração futura desde dia 1** — evita assumption errado de próximo agente.
+13. **Pattern proativo de revisar pós-descanso decisões estratégicas com prazo curto** — Henrique mudou de Customer pra HIGH primeiro com cabeça descansada. Documentado.
+14. **Bug descoberto = bug resolvido na mesma sessão quando custo é ~30min** — preserva invariante "zero débito antes de avançar features".
 
-CP1a do Débito #1 (commit c3dfecc) — Store expansion parte 1. Resolve 5 dos 7 itens do débito HIGH #1.
-- Store ganha 5 campos: `description` (Text, max 2000 Pydantic), `phone` (E.164 obrigatório NOT NULL via Opção E), `minimum_order_cents` (Integer nullable, NULL=sem mínimo), `cover_image` (URL HttpUrl), `logo` (URL HttpUrl).
-- Migration aditiva `b964b10e6672` (banco vazio confirmado: 0 stores). Opção E: `phone NOT NULL` direto, sem placeholder.
-- CheckConstraint `ck_stores_minimum_order_cents_non_negative` (NULL-safe) — só sufixo passado, naming_convention prefixa.
-- `@validates("phone")` reusa `validate_phone_e164` do User (pattern ADR-009).
-- `__repr__` aplica `mask_phone_for_log` proativamente (ADR-026 dec. 8) — antecipa débito LGPD do User.
-- `ProductRead.image_url` evolui `str | None` → `HttpUrl | None` (Caminho 2 escopo total — pattern HttpUrl em TODOS campos URL do projeto). Cast em service preserva mypy strict sem `# type: ignore`.
-- ADR-026 criado cobrindo as 8 decisões do HIGH #1 inteiro (CP1a + CP1b futuro).
-- 24 testes novos (16 model TestStoreExtensionFields + 5 endpoint TestStoreExtensionResponseShape + 3 PII regression). 511 → 535.
-
-Decisões deste CP1a (referência rápida — todas em ADR-026):
-- **D1 phone Store** = E.164 obrigatório, **não-unique** (lojas diferentes podem usar mesma central). Reusa validador do User.
-- **D2 Phone NOT NULL strategy** = Opção E (banco vazio, sem placeholder). Plano de remediação documentado pra futuro DB com dados.
-- **D3 HttpUrl pattern** em TODOS campos URL (cover_image, logo, image_url). Sem fragmentação "este sim, aquele não".
-- **D4 description** = Text + max_length=2000 Pydantic (validação na camada certa, pattern Order.notes/Product.description).
-- **D5 mask phone proativo** no `__repr__` (custo zero, antecipa débito LGPD).
-
-**Patterns reusáveis emergidos no CP1a HIGH #1:**
-- Verificação de segurança de dados ANTES de mudar schema validador (count + URLs válidas antes de virar HttpUrl). Pattern profissional pra futuras migrações de schema. Caught em CP1a — products vazio liberou Caminho 2 escopo total.
-- Opção E pra migration NOT NULL em banco vazio: mais honesto que placeholder. Plano de remediação documentado no ADR pra cenário futuro com dados.
-- HttpUrl em TODOS campos URL do projeto (cover_image, logo, image_url): consistência arquitetural. Não introduzir fragmentação "este sim, aquele não".
-- Pattern proativo de aplicar fixes preventivos quando custo é zero: `mask_phone_for_log` em Store antes mesmo do User ser corrigido. Evita criar 2 débitos LGPD idênticos.
-
-**Débitos HIGH restantes (apenas CP1b do #1):**
-1. CP1b do Débito #1 — `StoreOpeningHours` table + service helper "aberto agora?" + endpoints expõem horários. **ÚLTIMO sub-checkpoint do ciclo HIGH.**
+**Marco do projeto (fim do Ciclo HIGH):**
+- 481 testes ao fim do Ciclo Auth → **575 ao fim do Ciclo HIGH** (+94 testes em 3 dias, +19.5%)
+- 16 migrations → **21 migrations** (+5: HIGH #3 + HIGH #2 + LOW fix + CP1a + CP1b)
+- 17 tabelas → **18 tabelas** (+`store_opening_hours`)
+- ADRs: 25 → **26** (ADR-026 com 8 decisões + 4 reforços documentando HIGH #1 inteiro)
+- Backend agora **mobile-ready**: cliente real consegue abrir app, ver lista de lojas com logo + minimum_order, ver cardápio organizado por seção com produtos em destaque, login via SMS, perfil pessoal, e em cada loja vê foto, descrição, telefone, horários completos com badge "Aberto agora".
 
 ### Arquitetura documentada
 - **26 ADRs** em `C:\Users\henri\Documents\My second mind\Projetos\ISV Delivery\11 - Decisões Técnicas (log).md`
@@ -422,43 +394,36 @@ docker exec delivery-postgres-1 psql -U isv -d isv_delivery -c "SELECT ..."
 
 ## 6. Próximo passo sugerido
 
-**Status:** Ciclo Débitos HIGH em construção. **2/3 débitos resolvidos + CP1a do #1 feito** (commit c3dfecc). Falta apenas **CP1b do Débito #1** (`StoreOpeningHours` + service + endpoints) para fechar ciclo HIGH 3/3.
+**Status:** Ciclo Auth COMPLETO + Ciclo Débitos HIGH COMPLETO. Backend **mobile-ready**. Sem débito HIGH pendente. Foundation sólida pra ciclos seguintes.
 
-**Ordem dos ciclos (revisada em 2026-04-26):**
+**Próximo grande ciclo: Customer endpoints**
 
-1. **Débitos HIGH pré-piloto** ← em andamento, 2/3 + CP1a done
-2. Customer endpoints (depois dos HIGH)
-3. Order endpoints (requer Customer, depois)
+Razão: Customer é continuação natural (User já existe do Auth, FK 1:1 lazy). Pattern JWT do CP4 reusável direto em rotas protegidas. Bloqueia Order (Order.customer_id FK).
 
-**Débitos HIGH — status atual:**
+Escopo provável (a refinar em ADR dedicado quando ciclo iniciar):
+- Customer model (verificar se existe parcial — `customer_anonymization.py` em services indica trabalho prévio)
+- Schema CustomerRead, CustomerCreate, CustomerUpdate
+- Endpoints: `GET /api/v1/customers/me`, `POST /api/v1/customers`, `PATCH /api/v1/customers/me`
+- Customer-Address relationship (cadastro de endereços para entrega)
+- Integração com User: `User.customer` relationship 1:1
 
-- [x] **#3 Toggle ProductVariation individual** — commit 3159442 (CP1 do ciclo HIGH).
-- [x] **#2 Organização do cardápio** — commit 16e664d (CP2 do ciclo HIGH).
-- [ ] **#1 Expansão Store** — em andamento (CP1a feito, falta CP1b):
-  - [x] **CP1a** — 5 campos triviais + phone NOT NULL + ADR-026 (commit c3dfecc, 2026-04-26)
-  - [ ] **CP1b** — `StoreOpeningHours` table + service "aberto agora?" + endpoints
+Estimativa: 6-10h ritmo Henrique, 3-4 sub-checkpoints.
 
-**Débito LOW resolvido em paralelo:** commit b9e79c7 — rename de `ck_product_variations_status` removendo prefix duplicado herdado do CP1 HIGH. Cosmético, descoberto durante CP2 HIGH, resolvido na mesma sessão (~30min).
+**Após Ciclo Customer:**
 
-**Próximo passo: CP1b do Débito HIGH #1 — `StoreOpeningHours`**
-
-Escopo (todas as decisões já documentadas no ADR-026):
-- Tabela nova `store_opening_hours(id, store_id FK CASCADE, day_of_week 0-6, open_time Time, close_time Time)`
-- Service helper "loja aberta agora?" com lógica de timezone `America/Sao_Paulo` + cruzar meia-noite (`close_time < open_time` — ADR-026 dec. 3)
-- Endpoint expõe `opening_hours: []` em `StoreDetail` (lojas existentes pós-migration ficam sem horário, lojista preenche depois via painel admin futuro — ADR-026 dec. 4)
-
-**Tamanho:** médio (~2-3h ritmo Henrique). Decisões já tomadas no ADR-026, implementação é execução.
-
-**Após CP1b, ciclo HIGH 100% completo.** Então:
-
-- Ciclo Customer (cadastro + endereço + perfil) — ~3-5 dias
-- Ciclo Order (core do produto, requer Customer) — ~8-12 dias
-- Mobile React Native em paralelo (segundo agente)
+- Ciclo Order (core do produto, requer Customer FK) — ~15-25h
+- Mobile React Native em paralelo (segundo agente, será aberto pelo Henrique)
 - Pagar.me + Zenvia (depende CNPJ)
 
-**Mobile React Native:**
+**Mobile React Native — pode começar AGORA em paralelo:**
 
-Será iniciado APÓS o ciclo HIGH 100% (CP1b fecha o último). Henrique vai abrir segundo agente dedicado ao frontend nesse momento. Backend até lá cobre todas as telas iniciais necessárias (catálogo + login + perfil + cardápio organizado + dados expandidos da loja).
+Backend cobre todas as telas iniciais necessárias:
+- Splash + lista de lojas (com logo + minimum_order) + detalhe da loja (description, phone, horários, is_open_now badge)
+- Cardápio organizado (sections + featured + display_order)
+- Login via SMS (request-otp → verify-otp → JWT)
+- Perfil `/users/me`
+
+Order endpoints virão em paralelo com mobile crescendo.
 
 ---
 
