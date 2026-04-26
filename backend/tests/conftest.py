@@ -328,6 +328,34 @@ def user_factory(db_session: Session) -> Any:
 
 
 @pytest.fixture
+def customer_factory(db_session: Session, user_factory: Any) -> Any:
+    """Cria um Customer pra testes (CP1 do Ciclo Customer, ADR-027).
+
+    Cria User automaticamente se `user` não for passado nos overrides.
+    Garante `customer.phone == user.phone` por default (ADR-027 dec. 6 —
+    phone do Customer vem do User logado).
+    """
+    from app.models.customer import Customer
+
+    def _create(**overrides: Any) -> Customer:
+        # Aceita 'user' como atalho — pega phone + user_id automaticamente.
+        user = overrides.pop("user", None) or user_factory()
+        defaults: dict[str, Any] = {
+            "id": uuid.uuid4(),
+            "user_id": user.id,
+            "phone": user.phone,  # ADR-027 dec. 6
+            "name": "Cliente Teste",
+        }
+        defaults.update(overrides)
+        customer = Customer(**defaults)
+        db_session.add(customer)
+        db_session.flush()
+        return customer
+
+    return _create
+
+
+@pytest.fixture
 def otp_code_factory(db_session: Session) -> Any:
     """Cria um OtpCode pra testes. expires_at default now + 10 min (ADR-025)."""
     from datetime import UTC, datetime, timedelta
