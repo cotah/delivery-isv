@@ -31,6 +31,8 @@ class ErrorCode(StrEnum):
     STORE_NOT_FOUND = "store_not_found"
     CUSTOMER_NOT_FOUND = "customer_not_found"
     CUSTOMER_ALREADY_EXISTS = "customer_already_exists"
+    ADDRESS_NOT_FOUND = "address_not_found"
+    CITY_NOT_FOUND = "city_not_found"
     SMS_PROVIDER_ERROR = "sms_provider_error"
     INVALID_OTP_CODE = "invalid_otp_code"
     RATE_LIMITED = "rate_limited"

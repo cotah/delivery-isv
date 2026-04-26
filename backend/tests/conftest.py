@@ -356,6 +356,40 @@ def customer_factory(db_session: Session, user_factory: Any) -> Any:
 
 
 @pytest.fixture
+def address_factory(db_session: Session, customer_factory: Any, city_factory: Any) -> Any:
+    """Cria um Address pra testes (CP3 do Ciclo Customer, ADR-027 dec. 8-10).
+
+    Aceita atalhos: `customer` (cria automaticamente se não passar) +
+    `city` (cria automaticamente se não passar). Defaults sensatos pra
+    todos campos do model.
+    """
+    from app.domain.enums import AddressType
+    from app.models.address import Address
+
+    def _create(**overrides: Any) -> Address:
+        customer = overrides.pop("customer", None) or customer_factory()
+        city = overrides.pop("city", None) or city_factory()
+        defaults: dict[str, Any] = {
+            "id": uuid.uuid4(),
+            "customer_id": customer.id,
+            "city_id": city.id,
+            "address_type": AddressType.HOME,
+            "is_default": False,
+            "street": "Rua Teste",
+            "number": "100",
+            "neighborhood": "Centro",
+            "zip_code": "35855000",
+        }
+        defaults.update(overrides)
+        address = Address(**defaults)
+        db_session.add(address)
+        db_session.flush()
+        return address
+
+    return _create
+
+
+@pytest.fixture
 def otp_code_factory(db_session: Session) -> Any:
     """Cria um OtpCode pra testes. expires_at default now + 10 min (ADR-025)."""
     from datetime import UTC, datetime, timedelta
