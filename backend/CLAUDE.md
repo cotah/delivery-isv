@@ -4,7 +4,7 @@
 
 ---
 
-## 1. Estado atual (2026-04-26)
+## 1. Estado atual (2026-04-27)
 
 ### Schema de domínio
 **18 tabelas no Postgres:**
@@ -53,7 +53,7 @@
 22. `64f6e6cef194` — add user_id FK to customers (Customer cycle CP1 — ADR-027 dec. 1)
 
 ### Qualidade
-- **637 testes** passando em ~5s
+- **651 testes** passando em ~5s
 - **mypy strict** limpo em **123 source files**
 - **ruff check** + **ruff format** limpos
 - Zero `# noqa`, zero `# type: ignore` novos (2 narrow ignores legítimos pré-existentes em test_base.py CP2 com justificativa documentada)
@@ -125,10 +125,10 @@ Cliente real consegue: POST /auth/request-otp → recebe SMS → POST /auth/veri
 - SELECT FOR UPDATE pra serializar operações concorrentes
 - Cast explícito vs # type: ignore (cast para produção, narrow ignore aceitável em testes que verificam erros que mypy detecta estaticamente)
 
-**Débitos abertos do Ciclo Auth (3 MEDIUM, registrados no roadmap):**
-1. Estratégia de secrets no Claude Code (CP3a) — antes de staging ou multi-dev
-2. Rate limit phone-based (CP3c) — slowapi async key_func limitation, antes de scale
-3. Fail-open runtime Redis (CP3c) — middleware custom, antes de staging Railway
+**Débitos do Ciclo Auth (3 MEDIUM — TODOS RESOLVIDOS em 2026-04-27):**
+1. ~~Estratégia de secrets no Claude Code (CP3a)~~ → resolvido em commit `6f93a00` (MEDIUM #1) + ADR-028 + `docs/SECRETS.md` + gitleaks pre-commit hook
+2. ~~Rate limit phone-based (CP3c)~~ → resolvido em commit `a76c512` (MEDIUM #2) via helper manual `check_phone_rate_limit` (Opção C, hit após Pydantic parse)
+3. ~~Fail-open runtime Redis (CP3c)~~ → resolvido em commit `752a1dc` (MEDIUM #3) via flags slowapi nativas (`swallow_errors=True` + `in_memory_fallback_enabled=True`)
 
 **Ciclo Débitos HIGH pré-piloto — COMPLETO em 2026-04-26 (3/3 débitos resolvidos + 1 LOW em paralelo):**
 
@@ -204,15 +204,63 @@ CP4 (este commit) — Pausa de docs final. Decisão 15 do ADR-027 estendida com 
 
 Falta apenas Order (próximo grande ciclo).
 
-**Débitos novos rastreados durante o Ciclo Customer (2):**
+**Débitos rastreados durante o Ciclo Customer (2 — TODOS RESOLVIDOS em 2026-04-26):**
 
-**LOW**: Email validation rigorosa de formato. Hoje `CustomerCreate/Update` usam `str + max_length=254` sem validação de formato (pode aceitar `"abc"` como email no banco). Solução: adicionar `email-validator` dep + `EmailStr` no schema. Custo: ~5 min. Bloqueante: não (emails ainda não são usados em comunicação real). Resolver antes do piloto.
+**LOW**: ~~Email validation rigorosa de formato~~ → resolvido em commit `b36a01d` via `email-validator` dep + `EmailStr` em `CustomerCreate/Update`.
 
-**MEDIUM**: `ValueError` em `@validates` do model retorna 500 Internal Server Error em vez de 422 `validation_failed`. Afeta CPF (e potencialmente phone, embora improvável via API já que phone vem do User logado). Solução: global exception handler em FastAPI capturando `ValueError` → `HTTPException(422, validation_failed)` com message do error. Custo: ~30 min. **Bloqueante pra UX**: sim (cliente recebe 500 ao mandar CPF malformatado, vira ticket de suporte). Resolver antes do piloto.
+**MEDIUM**: ~~`ValueError` em `@validates` retorna 500 em vez de 422~~ → resolvido em commit `b36a01d` via global exception handler `value_error_handler` em `app/api/errors.py:135`.
+
+---
+
+## 1.bis Marco do projeto — ZERO débitos pré-piloto (2026-04-27)
+
+Após sessão consecutiva de 7 mini-CPs em 2 dias (2026-04-26 + 2026-04-27), lista herdada desde Auth cycle CP3a foi zerada. **Backend pronto pra Order cycle sem dividas técnicas bloqueantes.**
+
+**Sequência de resolução:**
+
+**Sessão 2026-04-26** (4 débitos — 2 commits):
+- LOW: Email validation rigorosa (`b36a01d`)
+- MEDIUM: Global ValueError → 422 handler (`b36a01d`)
+- LOW: User.__repr__ LGPD via `mask_phone_for_log` (`dadaced`)
+- LOW: ADR-005 testability limitation section (`dadaced`)
+
+**Sessão 2026-04-27** (3 débitos MEDIUM Auth-inherited — 3 commits):
+- MEDIUM #3: Redis fail-open runtime (`752a1dc`) — bloqueava staging Railway
+- MEDIUM #2: Phone-based rate limit (`a76c512`) — bloqueava scale + protege contra abuse direcionado
+- MEDIUM #1: Secrets strategy (`6f93a00`) — bloqueava staging Railway, último a fechar
+
+**Restam apenas débitos pós-piloto** (LGPD cycle, observability ops, fixture infra-tests dedicada) **— nenhum bloqueia staging nem MVP**.
+
+**Patterns reusáveis estabelecidos no Ciclo MEDIUM (7 novos):**
+
+1. **Reprodução empírica antes de implementar handler de exception (MEDIUM #3 + #2).** Script Python validou comportamento real da lib externa antes de propor fix. Sem isso, escopo seria 10x maior (middleware custom em vez de 2 flags). Pattern: validar lib externa empiricamente quando comportamento é decisão central do fix.
+
+2. **Slowapi flags nativas sobre middleware custom (MEDIUM #3).** `swallow_errors=True` + `in_memory_fallback_enabled=True` cobrem fail-open runtime + recovery automático + log estruturado de transição. Reduz código, garante atualizações upstream, melhor proteção residual (in-memory fallback durante outage Redis em vez de fail-open puro).
+
+3. **Helper manual com fail-open replicado (MEDIUM #2 phone limit).** `slowapi.swallow_errors` NÃO cobre `limiter.limiter.hit()` direto. Quando hit manual é necessário (acesso a body parsed pelo Pydantic), replicar try/except no helper pra preservar pattern fail-open. Sem isso, regrediria ganho do MEDIUM #3.
+
+4. **Defesa em camadas independentes (MEDIUM #2).** IP rate limit (anti-scrape, decorator) + phone rate limit (anti-targeted-abuse, helper manual) + `OtpCode.attempts` (anti-brute-force, DB) + Zenvia upstream (anti-burst SMS, futuro). 4 camadas, falha de uma não compromete outras. Pattern profissional pra proteção de endpoints sensíveis.
+
+5. **Regra inviolável valores de secrets em chat (MEDIUM #1).** Agente nunca traz valores reais de secrets pra conversa (incluindo mascarados, parciais, hashes). Apenas nomes, localização, atributos estruturais. Lesson learned do incidente outubro 2025. Pattern aplicado preventivamente em qualquer interação com secrets — mesmo se solicitado explicitamente, agente recusa.
+
+6. **Documentação operacional de secrets em arquivo dedicado (MEDIUM #1).** `docs/SECRETS.md` (NÃO `SECURITY.md`, NÃO `RUNBOOK.md`). Escopo específico: inventário, rotação, acesso, future secrets, lessons learned. Cross-reference repo→vault preserva ADR como fonte da verdade arquitetural. Pattern: doc operacional vive no repo (peer-reviewable), decisão arquitetural vive no vault (ADR).
+
+7. **Soft enforcement com upgrade path (MEDIUM #1 gitleaks).** Pre-commit hook com fallback gracioso quando ferramenta ausente — bloquear commits sem ferramenta instalada é pior que avisar + passar. Pattern: detecção preventiva sem fricção em onboarding. Hook vira gate efetivo quando dev instala localmente; até lá, warning visível em cada commit lembra ação manual.
+
+**Marco do projeto (fim do Ciclo MEDIUM):**
+- 637 testes (fim Customer) → **651 ao fim do Ciclo MEDIUM** (+14, +2.2%; +7 do MEDIUM #2 phone-based, +7 dos LOW/MEDIUM da sessão 2026-04-26)
+- 22 migrations (mesmo — todos os mini-CPs MEDIUM eram código de runtime ou docs, zero schema novo)
+- 18 tabelas (mesmo)
+- 14 ErrorCodes (mesmo — `rate_limited` reusado em phone limit; nenhum ErrorCode novo)
+- ADRs: 27 → **28** (ADR-028 com decisão de tooling de secrets + 4 alternativas + 4 trade-offs aceitos + implicações pra próximos ciclos)
+- Novo doc operacional: `docs/SECRETS.md` (12 seções, ~330 linhas)
+- Novo arquivo de config: `.gitleaks.toml` (raiz)
+- Novo hook local: `.git/hooks/pre-commit` (não-tracked por design do `.git/`)
 
 ### Arquitetura documentada
-- **27 ADRs** em `C:\Users\henri\Documents\My second mind\Projetos\ISV Delivery\11 - Decisões Técnicas (log).md`
+- **28 ADRs** em `C:\Users\henri\Documents\My second mind\Projetos\ISV Delivery\11 - Decisões Técnicas (log).md` (ADR-028 mais recente: estratégia de gestão de secrets, ciclo MEDIUM 2026-04-27)
 - 9 StrEnums em `app/domain/enums.py`: `Environment`, `AddressType`, `TaxIdType`, `StoreStatus`, `ProductStatus`, `ProductVariationStatus`, `AddonGroupType`, `MenuSection`, `OrderStatus`
+- Doc operacional: `docs/SECRETS.md` (gestão de secrets — inventário, rotação, acesso, future secrets, lessons learned)
 
 ---
 
@@ -445,36 +493,37 @@ docker exec delivery-postgres-1 psql -U isv -d isv_delivery -c "SELECT ..."
 
 ## 6. Próximo passo sugerido
 
-**Status:** Auth completo + HIGH 3/3 + **Customer cycle 100% completo**. Backend cobre fluxo cliente real ponta-a-ponta exceto Order.
+**Status:** Ciclo Auth completo + HIGH 3/3 + Customer 4/4 + **mini-CPs de fix completos** (4 sessão 2026-04-26 + 3 sessão 2026-04-27). **ZERO débitos pré-piloto.** Backend pronto pra Order cycle sem dividas herdadas.
 
 **Próximo grande ciclo: Order endpoints**
 
 Foundation existe há várias sessões (commits `26d7243`, `5dfc717`, `d706566`, `99e486a`):
-- `Order` model
-- `OrderItem` model
-- `OrderItemAddon` model
-- `OrderStatusLog` model
-- FK `Order.customer_id` RESTRICT
-- FK `Order.store_id` RESTRICT
+- `Order`, `OrderItem`, `OrderItemAddon`, `OrderStatusLog` models
+- FK `Order.customer_id` RESTRICT + FK `Order.store_id` RESTRICT
 
-Falta apenas camada de aplicação (schemas + repository + service + endpoints). Estimativa otimista: 6-10h ritmo Henrique (~4-5 sub-CPs).
+Falta apenas camada de aplicação (schemas + repository + service + endpoints). Estimativa: 6-10h ritmo Henrique (~4-5 sub-CPs). ADR-029 dedicado provavelmente.
 
-**Estrutura provável:**
+**Estrutura provável (a confirmar via PASSO 0 do Order CP1):**
 - **CP1**: Schemas Pydantic Order/OrderItem/OrderItemAddon + Read endpoints (`GET /orders`, `GET /orders/{id}`)
 - **CP2**: `POST /orders` (criar pedido novo, transação Customer + Store + Items + Addons + status inicial)
 - **CP3**: Status transitions (`PATCH /orders/{id}/status` — lojista atualiza)
 - **CP4**: Listagem por lojista (`GET /stores/{store_id}/orders` pra dashboard)
 - **CP5**: Pausa de docs final
 
-**Após Order cycle:**
-- Mobile React Native (segundo agente, pode iniciar AGORA mesmo)
-- Pagar.me integration (CNPJ pendente)
-- LGPD cycle (`anonymize_customer` real + `DELETE /users/me` + global ValueError handler)
+**Decisões pendentes pra Order cycle (a confirmar antes de implementar CP1):**
+- `user_type` strategy (cliente / lojista / entregador) — bloqueia trabalho multi-perfil
+- Real-time strategy (WebSocket vs polling)
+- Status transitions (state machine formal vs ad-hoc)
+- Matching algorithm (proximidade, FIFO, híbrido)
 
-**Débitos pré-piloto a resolver:**
-- LOW `email-validator` (~5min)
-- MEDIUM `ValueError` → 422 handler (~30min)
-- 3 MEDIUM herdados do Auth cycle (secrets strategy, rate limit phone, Redis fail-open)
+**Após Order cycle:**
+- Mobile React Native (segundo agente, **pode iniciar AGORA em paralelo**)
+- Pagar.me integration (CNPJ pendente)
+- Zenvia provider real (CNPJ pendente)
+- LGPD cycle (`anonymize_customer` real + `DELETE /users/me`)
+
+**Ações manuais não-bloqueantes:**
+- `scoop install gitleaks` no Windows pra ativar pre-commit hook (hoje em fallback gracioso, não bloqueia commits)
 
 ---
 
